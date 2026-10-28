@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hospital.example.com/schemas/events/bed-stats.json",
+  "title": "BedStats",
+  "description": "Schema for aggregated stream analytics output from Flink on Dataproc published to bed-stats topic",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "pool_id",
+    "window_start",
+    "window_end",
+    "requests",
+    "allocated",
+    "waitlisted",
+    "conflicts",
+    "occupancy_at_window_end",
+    "contention_rate"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": ["1.0.0"]
+    },
+    "pool_id": {
+      "type": "string"
+    },
+    "window_start": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "window_end": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "requests": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "allocated": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "waitlisted": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "conflicts": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "occupancy_at_window_end": {
+      "type": "integer"
+    },
+    "average_lock_wait_ms": {
+      "type": ["number", "null"]
+    },
+    "average_allocation_wait_ms": {
+      "type": ["number", "null"]
+    },
+    "contention_rate": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0
+    }
+  },
+  "additionalProperties": false
+}

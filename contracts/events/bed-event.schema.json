@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hospital.example.com/schemas/events/bed-event.json",
+  "title": "BedEvent",
+  "description": "Event schema for Kafka bed-events topic for stream analytics",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "event_id",
+    "event_type",
+    "event_time",
+    "request_id",
+    "allocation_id",
+    "admission_id",
+    "patient_id",
+    "pool_id",
+    "lock_contended",
+    "occupancy_delta"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": ["1.0.0"]
+    },
+    "event_id": {
+      "type": "string"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "ALLOCATION_REQUESTED",
+        "BED_ALLOCATED",
+        "ALLOCATION_WAITLISTED",
+        "BED_RELEASED",
+        "ALLOCATION_CONFLICT"
+      ]
+    },
+    "event_time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "allocation_id": {
+      "type": "string"
+    },
+    "admission_id": {
+      "type": "string"
+    },
+    "patient_id": {
+      "type": "string"
+    },
+    "pool_id": {
+      "type": "string"
+    },
+    "bed_id": {
+      "type": ["string", "null"]
+    },
+    "lock_wait_ms": {
+      "type": ["integer", "null"]
+    },
+    "lock_contended": {
+      "type": "boolean"
+    },
+    "allocation_wait_ms": {
+      "type": ["integer", "null"]
+    },
+    "occupancy_delta": {
+      "type": "integer",
+      "enum": [-1, 0, 1]
+    }
+  },
+  "additionalProperties": false
+}

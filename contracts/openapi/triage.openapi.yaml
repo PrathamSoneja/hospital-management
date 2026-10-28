@@ -1,0 +1,211 @@
+openapi: 3.0.3
+info:
+  title: Hospital Triage Service API
+  version: 1.0.0
+  description: Manages patient clinical urgency assessment and priority queues per pool.
+paths:
+  /api/v1/triage/{admission_id}:
+    put:
+      summary: Set or update triage assessment
+      parameters:
+        - name: admission_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Request-ID
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetTriageRequest'
+      responses:
+        '200':
+          description: Triage assessment created or updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TriageRecord'
+        '400':
+          $ref: '#/components/responses/ErrorResponse400'
+        '409':
+          $ref: '#/components/responses/ErrorResponse409'
+    get:
+      summary: Get triage assessment for an admission
+      parameters:
+        - name: admission_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Request-ID
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Triage assessment found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TriageRecord'
+        '404':
+          $ref: '#/components/responses/ErrorResponse404'
+
+  /api/v1/waitlists/{pool_id}:
+    get:
+      summary: List ordered waitlist entries for a resource pool
+      parameters:
+        - name: pool_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: X-Request-ID
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Ordered list of waitlisted allocations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WaitlistPage'
+
+components:
+  schemas:
+    SetTriageRequest:
+      type: object
+      required:
+        - triage_level
+        - pool_id
+      properties:
+        triage_level:
+          type: integer
+          minimum: 1
+          maximum: 5
+          description: 1 is most urgent, 5 is least urgent
+        pool_id:
+          type: string
+          example: WARDA-ICU
+
+    TriageRecord:
+      type: object
+      required:
+        - admission_id
+        - triage_level
+        - pool_id
+        - updated_at
+      properties:
+        admission_id:
+          type: string
+        triage_level:
+          type: integer
+          minimum: 1
+          maximum: 5
+        pool_id:
+          type: string
+        updated_at:
+          type: string
+          format: date-time
+
+    WaitlistEntry:
+      type: object
+      required:
+        - entry_id
+        - allocation_id
+        - admission_id
+        - pool_id
+        - triage_level
+        - queued_at
+      properties:
+        entry_id:
+          type: string
+        allocation_id:
+          type: string
+        admission_id:
+          type: string
+        pool_id:
+          type: string
+        triage_level:
+          type: integer
+          minimum: 1
+          maximum: 5
+        queued_at:
+          type: string
+          format: date-time
+
+    WaitlistPage:
+      type: object
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/WaitlistEntry'
+        next_cursor:
+          type: string
+          nullable: true
+
+    ErrorEnvelope:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+            - request_id
+            - retryable
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            request_id:
+              type: string
+            retryable:
+              type: boolean
+
+  responses:
+    ErrorResponse400:
+      description: Invalid argument or validation failure
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ErrorResponse404:
+      description: Requested resource was not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ErrorResponse409:
+      description: State conflict or precondition failure
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'

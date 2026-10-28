@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package hospital.v1;
+
+import "common.proto";
+
+// StaffScheduler provides clinical staff assignment and capacity checks.
+// Owned by Ruchi Kumar (Team Member A).
+// STATUS: PROVISIONAL CONTRACT - pending team review.
+service StaffScheduler {
+  rpc CheckCapacity (CheckCapacityRequest) returns (CheckCapacityResponse);
+  rpc AssignStaff (AssignStaffRequest) returns (AssignStaffResponse);
+  rpc ReleaseAssignment (ReleaseAssignmentRequest) returns (ReleaseAssignmentResponse);
+}
+
+message CheckCapacityRequest {
+  string pool_id = 1;
+  string request_id = 2;
+}
+
+message CheckCapacityResponse {
+  bool has_capacity = 1;
+  int32 available_count = 2;
+}
+
+message AssignStaffRequest {
+  MutationContext context = 1;
+  string allocation_id = 2;
+  string bed_id = 3;
+}
+
+message AssignStaffResponse {
+  bool success = 1;
+  string staff_assignment_id = 2;
+  string staff_id = 3;
+  string error_message = 4;
+}
+
+message ReleaseAssignmentRequest {
+  MutationContext context = 1;
+  string staff_assignment_id = 2;
+  string allocation_id = 3;
+}
+
+message ReleaseAssignmentResponse {
+  bool success = 1;
+  string error_message = 2;
+}

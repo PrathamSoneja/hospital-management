@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package hospital.v1;
+
+// MutationContext carries transactional and distributed lock fencing metadata
+// for all state-changing operations across services.
+message MutationContext {
+  // Stable operation identifier (e.g. alloc-001:reserve-bed)
+  string operation_id = 1;
+  // Per-attempt trace identifier for request tracking
+  string request_id = 2;
+  // Resource pool identifier (e.g. WARDA-ICU)
+  string pool_id = 3;
+  // Active distributed lock identifier
+  string lock_id = 4;
+  // Owner/service instance holding the lock
+  string owner_id = 5;
+  // Monotonically increasing fencing token issued by ZooKeeper Lock Coordinator
+  uint64 fencing_token = 6;
+}
+
+// Standard RPC Error representation
+message ErrorResponse {
+  string code = 1;
+  string message = 2;
+  string request_id = 3;
+  bool retryable = 4;
+}

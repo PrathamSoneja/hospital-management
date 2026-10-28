@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package hospital.v1;
+
+// LockCoordinator provides distributed locking backed by Apache ZooKeeper.
+// Owned by Nisarg Vagh (Team Member C).
+service LockCoordinator {
+  // Acquire a distributed lease with an ordered fencing token
+  rpc Acquire (AcquireLockRequest) returns (AcquireLockResponse);
+  
+  // Renew an existing active lease
+  rpc Renew (RenewLockRequest) returns (RenewLockResponse);
+  
+  // Release an active lease
+  rpc Release (ReleaseLockRequest) returns (ReleaseLockResponse);
+  
+  // Validate whether a lock and fencing token remain valid and active
+  rpc Validate (ValidateLockRequest) returns (ValidateLockResponse);
+}
+
+message AcquireLockRequest {
+  string pool_id = 1;
+  string owner_id = 2;
+  string acquire_id = 3;
+  int64 lease_ms = 4;
+  int64 wait_timeout_ms = 5;
+}
+
+message AcquireLockResponse {
+  string lock_id = 1;
+  string pool_id = 2;
+  string owner_id = 3;
+  uint64 fencing_token = 4;
+  int64 expires_at = 5;       // Milliseconds since Unix epoch
+  int64 lock_wait_ms = 6;     // Time spent waiting to acquire
+}
+
+message RenewLockRequest {
+  string lock_id = 1;
+  string owner_id = 2;
+  int64 lease_ms = 3;
+}
+
+message RenewLockResponse {
+  bool success = 1;
+  int64 expires_at = 2;
+}
+
+message ReleaseLockRequest {
+  string lock_id = 1;
+  string owner_id = 2;
+}
+
+message ReleaseLockResponse {
+  bool success = 1;
+}
+
+message ValidateLockRequest {
+  string lock_id = 1;
+  string owner_id = 2;
+  string pool_id = 3;
+  uint64 fencing_token = 4;
+}
+
+message ValidateLockResponse {
+  bool valid = 1;
+  string reason = 2;
+}

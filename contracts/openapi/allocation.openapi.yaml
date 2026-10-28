@@ -1,0 +1,314 @@
+openapi: 3.0.3
+info:
+  title: Hospital Bed Allocation Service API
+  version: 1.0.0
+  description: Handles critical-care bed allocation, waitlisting, release, and promotion.
+paths:
+  /api/v1/allocations:
+    post:
+      summary: Request bed allocation or waitlist entry
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-Request-ID
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAllocationRequest'
+      responses:
+        '201':
+          description: Allocation successfully created or waitlisted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Allocation'
+        '400':
+          $ref: '#/components/responses/ErrorResponse400'
+        '409':
+          $ref: '#/components/responses/ErrorResponse409'
+        '503':
+          $ref: '#/components/responses/ErrorResponse503'
+    get:
+      summary: Query allocations by filter
+      parameters:
+        - name: pool_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [REQUESTED, ALLOCATED, WAITLISTED, RELEASED, CANCELLED]
+        - name: admission_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: X-Request-ID
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Paginated allocations list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AllocationPage'
+
+  /api/v1/allocations/{allocation_id}:
+    get:
+      summary: Get allocation details by ID
+      parameters:
+        - name: allocation_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Request-ID
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Allocation found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Allocation'
+        '404':
+          $ref: '#/components/responses/ErrorResponse404'
+
+  /api/v1/allocations/{allocation_id}/release:
+    post:
+      summary: Release an allocated bed and promote next eligible waitlisted patient
+      parameters:
+        - name: allocation_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-Request-ID
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - reason
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Bed released and promotion attempted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReleaseResult'
+        '400':
+          $ref: '#/components/responses/ErrorResponse400'
+        '404':
+          $ref: '#/components/responses/ErrorResponse404'
+        '409':
+          $ref: '#/components/responses/ErrorResponse409'
+
+  /api/v1/allocations/{allocation_id}/cancel:
+    post:
+      summary: Cancel a waitlisted allocation
+      parameters:
+        - name: allocation_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-Request-ID
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - reason
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Allocation cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Allocation'
+        '400':
+          $ref: '#/components/responses/ErrorResponse400'
+        '404':
+          $ref: '#/components/responses/ErrorResponse404'
+        '409':
+          $ref: '#/components/responses/ErrorResponse409'
+
+components:
+  schemas:
+    CreateAllocationRequest:
+      type: object
+      required:
+        - admission_id
+        - pool_id
+      properties:
+        admission_id:
+          type: string
+        pool_id:
+          type: string
+
+    Allocation:
+      type: object
+      required:
+        - allocation_id
+        - admission_id
+        - pool_id
+        - status
+        - created_at
+      properties:
+        allocation_id:
+          type: string
+        admission_id:
+          type: string
+        pool_id:
+          type: string
+        status:
+          type: string
+          enum: [REQUESTED, ALLOCATED, WAITLISTED, RELEASED, CANCELLED]
+        bed_id:
+          type: string
+          nullable: true
+        staff_assignment_id:
+          type: string
+          nullable: true
+        waitlist_entry_id:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    ReleaseResult:
+      type: object
+      required:
+        - allocation_id
+        - status
+      properties:
+        allocation_id:
+          type: string
+        status:
+          type: string
+          enum: [RELEASED]
+        promoted_allocation_id:
+          type: string
+          nullable: true
+
+    AllocationPage:
+      type: object
+      required:
+        - items
+        - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Allocation'
+        next_cursor:
+          type: string
+          nullable: true
+
+    ErrorEnvelope:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+            - request_id
+            - retryable
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            request_id:
+              type: string
+            retryable:
+              type: boolean
+
+  responses:
+    ErrorResponse400:
+      description: Invalid argument or validation failure
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ErrorResponse404:
+      description: Requested resource was not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ErrorResponse409:
+      description: State conflict, precondition failure, or duplicate idempotency key with different payload
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ErrorResponse503:
+      description: Downstream service unavailable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'

@@ -1,0 +1,15 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "waitlist_entries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "pool_id", "order": "ASCENDING" },
+        { "fieldPath": "triage_level", "order": "ASCENDING" },
+        { "fieldPath": "queued_at", "order": "ASCENDING" },
+        { "fieldPath": "entry_id", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

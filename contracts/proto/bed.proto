@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package hospital.v1;
+
+import "common.proto";
+
+// BedService provides bed inventory and status management.
+// Owned by Jay Patel (Team Member D).
+// STATUS: PROVISIONAL CONTRACT - pending team review.
+service BedService {
+  rpc ListAvailableBeds (ListAvailableBedsRequest) returns (ListAvailableBedsResponse);
+  rpc GetBed (GetBedRequest) returns (GetBedResponse);
+  rpc AllocateBed (AllocateBedRequest) returns (AllocateBedResponse);
+  rpc ReleaseBed (ReleaseBedRequest) returns (ReleaseBedResponse);
+}
+
+message Bed {
+  string bed_id = 1;
+  string pool_id = 2;
+  string ward = 3;
+  string status = 4; // AVAILABLE, OCCUPIED, MAINTENANCE
+  string current_allocation_id = 5;
+}
+
+message ListAvailableBedsRequest {
+  string pool_id = 1;
+  string request_id = 2;
+}
+
+message ListAvailableBedsResponse {
+  repeated Bed beds = 1;
+}
+
+message GetBedRequest {
+  string bed_id = 1;
+  string request_id = 2;
+}
+
+message GetBedResponse {
+  bool found = 1;
+  Bed bed = 2;
+}
+
+message AllocateBedRequest {
+  MutationContext context = 1;
+  string bed_id = 2;
+  string allocation_id = 3;
+}
+
+message AllocateBedResponse {
+  bool success = 1;
+  Bed bed = 2;
+  string error_message = 3;
+}
+
+message ReleaseBedRequest {
+  MutationContext context = 1;
+  string bed_id = 2;
+  string allocation_id = 3; // Enforces ownership check: release only if still owned by allocation_id
+}
+
+message ReleaseBedResponse {
+  bool success = 1;
+  string error_message = 2;
+}

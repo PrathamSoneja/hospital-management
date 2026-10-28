@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hospital.example.com/schemas/events/notification.json",
+  "title": "NotificationEvent",
+  "description": "Event schema for Google Pub/Sub staff notification messaging",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "event_id",
+    "event_type",
+    "occurred_at",
+    "request_id",
+    "allocation_id",
+    "admission_id",
+    "pool_id",
+    "ward"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": ["1.0.0"]
+    },
+    "event_id": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F-]+$"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "BED_ALLOCATED",
+        "ALLOCATION_WAITLISTED",
+        "BED_RELEASED",
+        "ALLOCATION_CONFLICT"
+      ]
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "allocation_id": {
+      "type": "string"
+    },
+    "admission_id": {
+      "type": "string"
+    },
+    "pool_id": {
+      "type": "string"
+    },
+    "bed_id": {
+      "type": ["string", "null"]
+    },
+    "ward": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

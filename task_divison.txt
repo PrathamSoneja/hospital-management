@@ -1,0 +1,41 @@
+HOSPITAL BED MANAGEMENT - TEAM TASK DIVISION
+
+Team Members and Ownership:
+================================================================================
+Member A: Ruchi Kumar
+Assigned Services:
+- Patient Registry Service (REST)
+- Staff Scheduler Service (gRPC)
+Infrastructure & DevOps Ownership:
+- Core Terraform / Cloud Platform Provisioning (GKE Standard, Networking, VPC, IAM)
+- ArgoCD / GitOps Pipeline Setup & Management
+
+--------------------------------------------------------------------------------
+Member B: Pratham Soneja 
+Assigned Services:
+- Bed Allocation Service (REST, gRPC client, PostgreSQL, transactional outbox)
+- Triage Service (REST, gRPC server, Firestore/in-memory repo, priority waitlist)
+Infrastructure & DevOps Ownership:
+- Kubernetes Workload Configuration & HPA (Horizontal Pod Autoscaler) on Bed Allocation & Triage
+- Sustained Load Testing with k6 (contention.js, scaling.js)
+- Observability: Prometheus metrics, Grafana dashboards, Cloud Logging structured logs
+
+--------------------------------------------------------------------------------
+Member C: Nisarg Vagh
+Assigned Services:
+- Lock Coordinator Service (gRPC, ZooKeeper ensemble integration)
+- Notification Service / Cloud Run Serverless Handler
+Infrastructure & DevOps Ownership:
+- ZooKeeper Distributed Coordination Ensemble
+- Serverless Eventarc + Google Pub/Sub Notification Integration
+
+--------------------------------------------------------------------------------
+Member D: Jay Patel
+Assigned Services:
+- Bed Registry Service (gRPC)
+- Resource Analytics Service (Kafka consumer, stream analytics)
+Infrastructure & DevOps Ownership:
+- GKE-hosted Apache Kafka cluster
+- Apache Flink on Dataproc stream processing integration (bed-events -> bed-stats)
+- Cloud Storage persistence for analytics & backups
+================================================================================

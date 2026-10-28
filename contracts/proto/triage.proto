@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package hospital.v1;
+
+import "common.proto";
+
+// TriageService manages patient urgency ratings and prioritized waitlists per pool.
+// Owned by Pratham Soneja (Team Member B).
+service TriageService {
+  // Retrieve the triage assessment for a given admission
+  rpc GetTriage (GetTriageRequest) returns (GetTriageResponse);
+
+  // Enqueue an allocation request into the pool waitlist (requires valid MutationContext)
+  rpc Enqueue (EnqueueWaitlistRequest) returns (EnqueueWaitlistResponse);
+
+  // Peek the highest priority waiting entry for a pool without removing it
+  rpc PeekNext (PeekNextWaitlistRequest) returns (PeekNextWaitlistResponse);
+
+  // Remove a waitlist entry after successful promotion or explicit cancellation
+  rpc RemoveEntry (RemoveWaitlistEntryRequest) returns (RemoveWaitlistEntryResponse);
+}
+
+message TriageRecord {
+  string admission_id = 1;
+  int32 triage_level = 2; // Urgency level 1 (highest) to 5 (lowest)
+  string pool_id = 3;     // Resource pool (e.g. WARDA-ICU)
+  string updated_at = 4;  // UTC RFC 3339 string
+}
+
+message WaitlistEntry {
+  string entry_id = 1;
+  string allocation_id = 2;
+  string admission_id = 3;
+  string pool_id = 4;
+  int32 triage_level = 5;
+  string queued_at = 6;   // UTC RFC 3339 string
+}
+
+message GetTriageRequest {
+  string admission_id = 1;
+  string request_id = 2;
+}
+
+message GetTriageResponse {
+  bool found = 1;
+  TriageRecord triage = 2;
+}
+
+message EnqueueWaitlistRequest {
+  MutationContext context = 1;
+  string allocation_id = 2;
+  string admission_id = 3;
+}
+
+message EnqueueWaitlistResponse {
+  WaitlistEntry entry = 1;
+  bool already_existed = 2;
+}
+
+message PeekNextWaitlistRequest {
+  string pool_id = 1;
+  string request_id = 2;
+}
+
+message PeekNextWaitlistResponse {
+  bool found = 1;
+  WaitlistEntry entry = 2; // Valid if found is true
+}
+
+message RemoveWaitlistEntryRequest {
+  MutationContext context = 1;
+  string allocation_id = 2;
+  string reason = 3;
+}
+
+message RemoveWaitlistEntryResponse {
+  bool success = 1;
+}

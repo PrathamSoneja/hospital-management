@@ -1,0 +1,24 @@
+# Web and API
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+pydantic>=2.6.0
+httpx>=0.27.0
+
+# gRPC and Protobuf
+grpcio>=1.62.0
+grpcio-tools>=1.62.0
+protobuf>=4.25.0
+
+# Database and Storage
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.9
+google-cloud-firestore>=2.15.0
+
+# Observability and Messaging
+prometheus-client>=0.20.0
+jsonschema>=4.21.0
+python-dotenv>=1.0.0
+
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
