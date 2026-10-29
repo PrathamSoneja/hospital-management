@@ -58,6 +58,8 @@ All error responses strictly follow this format:
 
 If an allocation create or release has been durably accepted but remains unresolved, return HTTP 202 with `allocation_id`, `status: RECOVERING`, and `pending_action`; include a `Location` header pointing to `GET /api/v1/allocations/{allocation_id}`. GET returns the same recovery state. Do not return 202 if durable acceptance is uncertain. Retries with the same idempotency key must not start another workflow.
 
+Triage `PUT /api/v1/triage/{admission_id}` requires `Idempotency-Key`. The durable Firestore claim is scoped to method, operation, admission target, and hashed key; its canonical fingerprint covers method, operation, admission ID, triage level, and pool ID. Matching completed retries replay the original serialized `TriageRecord` without a lock or state mutation. Changed payload under the same scope returns 409. The first successful PUT fixes `pool_id` for this project version; pool changes return `409 POOL_CHANGE_NOT_SUPPORTED`.
+
 Only `RELEASED`, `CANCELLED`, and `FAILED` are terminal for admission uniqueness. `FAILED` is terminal only after confirming there is no active downstream ownership. A matching PostgreSQL partial unique-index violation maps to `ACTIVE_ALLOCATION_EXISTS`; idempotency replay is checked first.
 
 ---

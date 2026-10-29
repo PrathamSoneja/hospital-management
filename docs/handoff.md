@@ -1,6 +1,6 @@
 # Project Handoff
 
-Updated: 2026-10-29
+Updated: 2026-10-30
 
 ## Latest Local Milestone (2026-10-29)
 
@@ -59,7 +59,7 @@ The service baseline and approved uniqueness work were pushed to `origin/master`
 - System interpreter suite: `pytest -q` (collection errors due to missing dependencies).
 - No cloud resources were written, and no cluster deployment or billable action was run. Git commits `da915bd` and `8a2220b` were pushed to `origin/master` at the user's request.
 
-## Exact Next Task
+## Previous Next Task (Superseded 2026-10-30)
 
 Complete the approved Allocation Step 2: durable release/cancel claims and recovery, release-before-promotion ordering, failure and crash tests, then commit coherent tested functionality slices. Do not begin Triage until these gaps close. Do not start cloud work until tomorrow's approved GCP window.
 
@@ -89,3 +89,20 @@ Complete the approved Allocation Step 2: durable release/cancel claims and recov
 - **LOCAL-VERIFIED:** `.venv\Scripts\python.exe -m pytest -p no:cacheprovider tests\test_allocation_service.py tests\test_allocation_firestore_recovery.py tests\test_triage_service.py tests\test_triage_firestore_operations.py tests\contracts\test_event_schemas.py -q` with `TEST_POSTGRES_URL` on disposable `hospital_allocation_pratham_test` and `FIRESTORE_EMULATOR_HOST=localhost:8080` -> **50 passed**.
 - **MOCK-TESTED:** Allocation's downstream bed/staff/lock adapters remain fakes in the combined test. Firestore behavior itself used the local emulator. `MockFencingValidator` validates the adapter call; Firestore transaction enforces persisted pool fencing. The production service wiring still selects mock fencing and needs a separate approved Triage milestone.
 - Existing external ownership validation occurs before the Firestore transaction and can race with lease expiry before commit; this limitation is documented and not solved here. No cloud writes, original database writes, volume deletion, or pushes occurred. No broader Triage or publisher work was started.
+
+## Broader Triage Milestone (2026-10-30)
+
+- **LOCAL-VERIFIED:** Firestore REST PUT requires a validated `Idempotency-Key`; a canonical JSON scope is hashed for the ledger document ID, and the raw key is not stored or logged. Fingerprint mismatch returns 409. A completed matching replay returns the stored response before lock acquisition. New writes recheck the claim, immutable pool, active queue target, and decimal-string fencing state in one Firestore transaction; triage, any existing queue urgency, completed claim, and fence commit together. The transaction callback has no external effects. No queue row is created by urgency changes.
+- **LOCAL-VERIFIED:** Same-pool urgency updates are restricted to levels 1–5, preserve `entry_id` and `queued_at`, and update triage plus an existing queue row atomically. Enqueue rechecks triage inside its transaction, serializing it against a concurrent first PUT. `pool_id` is immutable after first creation; concurrent initial writes to different pools allow one winner and return `POOL_CHANGE_NOT_SUPPORTED` for the loser without mutating the loser’s fence. Completed ledger replay works without a fresh lease.
+- **LOCAL-VERIFIED:** GET triage missing-resource response, waitlist sort/pagination/cursor errors, request-ID response header, health/ready configuration, and Firestore dependency 503/504 mappings were checked. `healthz` is process-only; `readyz` checks bounded Firestore and Coordinator readiness. Unknown storage/fencing modes fail configuration. Memory storage and fake fencing are allowed only under `ENVIRONMENT=test`. `.env.example` leaves the Coordinator address empty; Compose does not invent a teammate service.
+- **MOCK-TESTED:** `GrpcLockCoordinatorClient` Acquire/Validate/Release, request-ID metadata, deadlines, and unavailable handling were tested against a local gRPC test server implementing the existing protobuf. This verifies the adapter contract only.
+- **TEAMMATE-BLOCKED:** No live teammate-owned Lock Coordinator service/endpoint is available locally. Therefore live ownership validation, lease semantics, and the external-validation-to-Firestore-commit race are not verified. The race is documented and not claimed fixed.
+- **LOCAL-VERIFIED:** `.venv\Scripts\python.exe scripts\compile_proto.py` completed without generated-file diffs; Python `py_compile` passed for changed Triage/observability modules; OpenAPI YAML parsed and required paths were present; `docker compose config --quiet` passed. Existing PostgreSQL 16 and Firestore emulator containers were already running and were not restarted.
+- **LOCAL-VERIFIED:** `TEST_POSTGRES_URL=postgresql+psycopg2://postgres:postgrespassword@localhost:5432/hospital_allocation_pratham_test` and `FIRESTORE_EMULATOR_HOST=localhost:8080` with `.venv\Scripts\python.exe -m pytest -p no:cacheprovider tests\test_allocation_service.py tests\test_allocation_firestore_recovery.py tests\test_triage_service.py tests\test_triage_firestore_operations.py tests\test_triage_put_firestore.py tests\test_triage_lock_coordinator.py tests\contracts\test_event_schemas.py -q` -> **59 passed, 0 skipped**. This combines PostgreSQL Allocation tests and emulator-backed Triage tests; Lock Coordinator is a local contract fake, not a live service.
+- **CLOUD-UNVERIFIED:** No cloud services were contacted or changed. Queue-fencing’s external validation race, distributed lock behavior, Cloud Logging, and actual production Firestore remain unverified. Allocation downstream clients remain fake in the recovery regression; PostgreSQL verification does not fix queue fencing or event-publishing defects.
+- **UNVERIFIED:** OpenAPI was parsed as YAML and structurally spot-checked; a dedicated OpenAPI schema validator was not available/run. Container image build/start was not part of this milestone. No tests were skipped in the regression command.
+- Triage implementation commit: `3908c52` (`feat(triage): persist idempotent triage updates`). The pre-existing staged `.gitignore` remains staged and excluded. No push, cloud action, volume deletion, or original/shared database migration occurred.
+
+### Next local milestone
+
+Implement and locally verify real Pub/Sub and Kafka adapters plus durable outbox claims, per-destination delivery state, retry/backoff, and crash-safe concurrent workers. Do not deploy to cloud. Resolve teammate integration contracts before live broker wiring; no publisher correctness is implied by this Triage milestone.
