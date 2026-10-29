@@ -14,7 +14,7 @@ from services.bed_allocation.clients.grpc_clients import (
     GrpcBedRegistryClient, GrpcLockCoordinatorClient, GrpcStaffSchedulerClient,
     GrpcTriageClient, HttpPatientRegistryClient
 )
-from services.bed_allocation.db import get_engine, init_db
+from services.bed_allocation.db import get_engine
 from services.bed_allocation.outbox.dispatcher import FakeEventPublisher, OutboxDispatcher
 from services.bed_allocation.rest import router as allocation_router, set_service
 from services.bed_allocation.service import BedAllocationDomainService
@@ -29,7 +29,6 @@ logger = setup_logger("bed-allocation-service")
 
 def build_app(database_url: str = None, use_fakes: bool = True) -> FastAPI:
     engine = get_engine(database_url)
-    init_db(engine)
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
     use_fakes_env = os.environ.get("USE_FAKES", str(use_fakes)).lower() == "true"

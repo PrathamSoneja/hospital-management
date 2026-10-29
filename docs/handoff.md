@@ -2,6 +2,16 @@
 
 Updated: 2026-10-29
 
+## Latest Local Milestone (2026-10-29)
+
+- **LOCAL-VERIFIED:** PostgreSQL 16 Compose service is healthy; original `hospital_allocation` remains at `20261029_01`, with its named volume preserved and no application rows. It was not migrated or reset during this milestone.
+- **LOCAL-VERIFIED:** New empty disposable `hospital_allocation_bootstrap_test` was initialized with Alembic-only revisions `20261029_00` (base model tables) and `20261029_01` (active admission index). PostgreSQL showed all four service tables and the partial unique predicate.
+- **LOCAL-VERIFIED:** Allocation app `/healthz` returned 200 and a DB-backed missing-allocation read returned 404 after migration. The app no longer calls `Base.metadata.create_all`; run Alembic before app startup.
+- **LOCAL-VERIFIED:** `.venv\Scripts\python.exe -m pytest -p no:cacheprovider tests\test_allocation_service.py -q` with `TEST_POSTGRES_URL` targeting the disposable DB -> **14 passed**.
+- **MOCK-TESTED:** Allocation collaborators in those workflow tests remain fakes. Concurrent same-key/same-input ran one workflow but the competing call received 409 instead of replay; durable idempotency and recovery require an approved schema/workflow contract.
+- **GENERATED-UNDEPLOYED:** Compose, `.env.example`, and Alembic default URLs specify `postgresql+psycopg2://`; Dockerfile includes Alembic configuration and scripts. Docker image was not built and no app container was restarted.
+- **CLOUD-UNVERIFIED:** No GCP resources or deployed services were inspected or changed. Triage fencing and queue transaction behavior, event publishers, Firestore, Cloud SQL and HPA remain unverified here.
+
 ## Scope and Worktree
 
 Member B owns Bed Allocation, Triage, HPA, k6, Prometheus/Grafana, and structured logging. No README, prior handoff, or workspace agent instructions were present during this review.
@@ -51,4 +61,4 @@ The service baseline and approved uniqueness work were pushed to `origin/master`
 
 ## Exact Next Task
 
-Implement the approved Triage urgency update behavior: acquire the existing per-pool lock once, atomically update the triage record and active queue entry while preserving `entry_id` and `queued_at`, and do not recreate an entry after promotion commits. Add Firestore transaction and lock-contention tests; then proceed to the approved allocation recovery lifecycle. No additional design changes are approved.
+Obtain approval for the Allocation durable idempotency/recovery schema and in-progress replay behavior, then implement step 2 from the current `docs/next-steps.md`. Do not alter the schema/workflow until that approval is received. Continue with the already-approved Triage transaction/fencing decisions only after the ordered Allocation milestone is complete.

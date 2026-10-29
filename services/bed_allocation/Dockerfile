@@ -12,6 +12,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy source tree
 COPY contracts/ contracts/
+COPY alembic.ini .
+COPY migrations/ migrations/
 COPY shared/ shared/
 COPY scripts/ scripts/
 COPY services/triage/ services/triage/
