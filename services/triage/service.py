@@ -102,8 +102,9 @@ class TriageDomainService:
             triage_level=triage.triage_level,
             queued_at=get_monotonic_rfc3339()
         )
-        saved_entry, already_existed = self.repo.enqueue_waitlist(entry)
-        if not already_existed:
+        enqueue_result = self.repo.enqueue_waitlist(context, entry)
+        saved_entry, already_existed = enqueue_result.entry, enqueue_result.already_existed
+        if not already_existed and not enqueue_result.replayed:
             WAITLIST_ENTRIES.labels(service="triage", pool_id=context.pool_id).inc()
 
         return saved_entry, already_existed
@@ -119,10 +120,10 @@ class TriageDomainService:
                 message="Mutation context invalid or lock fencing token superseded",
                 status_code=status.HTTP_409_CONFLICT
             )
-        removed = self.repo.remove_waitlist_entry(allocation_id)
-        if removed:
+        removed = self.repo.remove_waitlist_entry(context, allocation_id, reason)
+        if removed.success and not removed.replayed:
             WAITLIST_ENTRIES.labels(service="triage", pool_id=context.pool_id).dec()
-        return removed
+        return removed.success
 
     def list_waitlist(
         self, pool_id: str, limit: int = 50, cursor: Optional[str] = None

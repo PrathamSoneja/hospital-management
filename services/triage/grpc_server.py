@@ -111,9 +111,20 @@ class TriageGrpcServicer(triage_pb2_grpc.TriageServiceServicer):
             )
             return triage_pb2.RemoveWaitlistEntryResponse(success=success)
         except AppException as e:
-            code = "FAILED_PRECONDITION" if e.status_code == 409 else "INVALID_ARGUMENT"
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION if e.status_code == 409 else grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details(e.message)
+            if e.code == "OUTCOME_UNKNOWN":
+                code = "UNAVAILABLE"
+                grpc_code = grpc.StatusCode.UNAVAILABLE
+            elif e.status_code == 409:
+                code = "FAILED_PRECONDITION"
+                grpc_code = grpc.StatusCode.FAILED_PRECONDITION
+            elif e.status_code == 503:
+                code = "UNAVAILABLE"
+                grpc_code = grpc.StatusCode.UNAVAILABLE
+            else:
+                code = "INVALID_ARGUMENT"
+                grpc_code = grpc.StatusCode.INVALID_ARGUMENT
+            context.set_code(grpc_code)
+            context.set_details(f"{e.code}:{e.message}")
             return triage_pb2.RemoveWaitlistEntryResponse(success=False)
         except Exception as e:
             code = "INTERNAL"

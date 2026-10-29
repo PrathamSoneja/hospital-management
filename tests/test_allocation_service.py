@@ -696,6 +696,29 @@ def test_release_commit_survives_promotion_failure_and_preserves_queue(test_setu
     assert service.get_allocation(waiting.allocation_id).status == "ALLOCATED"
     assert test_setup["triage_domain"].peek_next("WARDA-ICU") is None
 
+def test_unknown_triage_remove_outcome_is_left_for_reconciliation(test_setup):
+    service = test_setup["service"]
+    create = lambda admission, key: service.create_allocation(CreateAllocationRequest(admission_id=admission, pool_id="WARDA-ICU"), key, key)
+    first = create("adm-open-1", "unknown-remove-first")
+    create("adm-open-2", "unknown-remove-second")
+    waiting = create("adm-open-3", "unknown-remove-waiting")
+    triage = test_setup["triage"]
+
+    def unknown_remove(*args, **kwargs):
+        raise AppException("OUTCOME_UNKNOWN", "queue operation requires reconciliation", 503, retryable=True)
+
+    triage.remove_entry = unknown_remove
+    assert service.release_allocation(first.allocation_id, "done", "unknown-remove-release", "unknown-remove-key").status == "RELEASED"
+    with service.session_factory() as session:
+        release = session.query(AllocationModel).filter_by(allocation_id=first.allocation_id).one()
+        workflow = __import__("json").loads(release.workflow_data)
+        assert release.status == "RELEASED"
+        assert release.pending_action == "RECONCILIATION_REQUIRED"
+        assert workflow["reconciliation_needed"] is True
+        assert workflow["reconciliation_reason"] == "TRIAGE_OUTCOME_UNKNOWN"
+    assert triage.service.peek_next("WARDA-ICU").allocation_id == waiting.allocation_id
+    assert service.recover_pending() == 0
+
 def test_cancel_claim_is_durable_before_queue_removal_and_retryable(test_setup):
     service = test_setup["service"]
     create = lambda admission, key: service.create_allocation(CreateAllocationRequest(admission_id=admission, pool_id="WARDA-ICU"), key, key)

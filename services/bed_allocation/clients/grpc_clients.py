@@ -119,6 +119,13 @@ class GrpcTriageClient(TriageClient):
             resp = self.stub.RemoveEntry(req, timeout=self.default_timeout_s)
             return resp.success
         except grpc.RpcError as e:
+            details = e.details() or ""
+            if e.code() == grpc.StatusCode.UNAVAILABLE and details.startswith("OUTCOME_UNKNOWN:"):
+                raise AppException("OUTCOME_UNKNOWN", "Triage queue operation requires reconciliation", status.HTTP_503_SERVICE_UNAVAILABLE, retryable=True)
+            if e.code() == grpc.StatusCode.FAILED_PRECONDITION and details.startswith("IDEMPOTENCY_MISMATCH:"):
+                raise AppException("IDEMPOTENCY_MISMATCH", "Triage operation_id was reused for a different queue target", status.HTTP_409_CONFLICT)
+            if e.code() == grpc.StatusCode.FAILED_PRECONDITION:
+                raise AppException("FAILED_PRECONDITION", "Triage mutation fencing or target validation failed", status.HTTP_409_CONFLICT)
             raise AppException("SERVICE_UNAVAILABLE", f"Triage remove entry failed: {e.details()}", status.HTTP_503_SERVICE_UNAVAILABLE, retryable=True)
 
 class GrpcBedRegistryClient(BedRegistryClient):

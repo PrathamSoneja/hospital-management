@@ -57,15 +57,18 @@ def test_waitlist_priority_ordering_and_fifo(domain_service):
 
     # Patient 2: Level 1 (most urgent) at T1
     domain_service.set_triage("adm-2", 1, "WARDA-ICU")
-    e2, _ = domain_service.enqueue(ctx, "alloc-2", "adm-2")
+    ctx2 = MutationContext(operation_id="op-2", lock_id="lk-1", owner_id="inst-1", pool_id="WARDA-ICU", fencing_token=2)
+    e2, _ = domain_service.enqueue(ctx2, "alloc-2", "adm-2")
 
     # Patient 3: Level 3 at T2 (same level as Patient 1, but later arrival)
     domain_service.set_triage("adm-3", 3, "WARDA-ICU")
-    e3, _ = domain_service.enqueue(ctx, "alloc-3", "adm-3")
+    ctx3 = MutationContext(operation_id="op-3", lock_id="lk-1", owner_id="inst-1", pool_id="WARDA-ICU", fencing_token=3)
+    e3, _ = domain_service.enqueue(ctx3, "alloc-3", "adm-3")
 
     # Patient 4: Level 2 at T3
     domain_service.set_triage("adm-4", 2, "WARDA-ICU")
-    e4, _ = domain_service.enqueue(ctx, "alloc-4", "adm-4")
+    ctx4 = MutationContext(operation_id="op-4", lock_id="lk-1", owner_id="inst-1", pool_id="WARDA-ICU", fencing_token=4)
+    e4, _ = domain_service.enqueue(ctx4, "alloc-4", "adm-4")
 
     # Verify peek_next returns most critical (Patient 2, level 1)
     peeked = domain_service.peek_next("WARDA-ICU")
@@ -87,7 +90,8 @@ def test_duplicate_enqueue_returns_existing(domain_service):
     
     # Repeated enqueue for same allocation
     e2, existed2 = domain_service.enqueue(ctx, "alloc-dup", "adm-dup")
-    assert existed2
+    # Matching operation replay returns the original first-call result.
+    assert not existed2
     assert e1.entry_id == e2.entry_id
 
 def test_prohibit_pool_change_while_waitlisted(domain_service):
@@ -130,6 +134,73 @@ def test_stale_fencing_token_rejected(domain_service, validator):
     assert exc.value.code == "FAILED_PRECONDITION"
     assert "superseded" in exc.value.message
 
+def test_remove_entry_replays_after_repository_service_recreation(domain_service, validator):
+    domain_service.set_triage("adm-remove", 2, "WARDA-ICU")
+    enqueue_ctx = MutationContext(operation_id="enqueue-remove", lock_id="lk-1", owner_id="inst-1", pool_id="WARDA-ICU", fencing_token=1)
+    entry, _ = domain_service.enqueue(enqueue_ctx, "alloc-remove", "adm-remove")
+    remove_ctx = MutationContext(operation_id="remove-once", lock_id="lk-2", owner_id="inst-2", pool_id="WARDA-ICU", fencing_token=2)
+    assert domain_service.remove_entry(remove_ctx, entry.allocation_id, "promoted") is True
+
+    # A restarted domain service over the same durable in-memory adapter models
+    # the adapter contract; Firestore restart coverage is in emulator tests.
+    restarted = TriageDomainService(domain_service.repo, validator)
+    fresh_lock_ctx = MutationContext(operation_id="remove-once", lock_id="lk-3", owner_id="inst-3", pool_id="WARDA-ICU", fencing_token=3)
+    assert restarted.remove_entry(fresh_lock_ctx, entry.allocation_id, "promoted") is True
+    assert restarted.peek_next("WARDA-ICU") is None
+    assert domain_service.repo._pool_fence_state["WARDA-ICU"]["fencing_token"] == "2"
+
+def test_remove_entry_conflict_and_distinct_operation_ids_do_not_alias(domain_service):
+    domain_service.set_triage("adm-remove-conflict", 1, "WARDA-ICU")
+    enqueue_ctx = MutationContext(operation_id="enqueue-conflict", lock_id="lk-1", owner_id="inst-1", pool_id="WARDA-ICU", fencing_token=1)
+    entry, _ = domain_service.enqueue(enqueue_ctx, "alloc-remove-conflict", "adm-remove-conflict")
+    remove_ctx = MutationContext(operation_id="remove-conflict", lock_id="lk-2", owner_id="inst-2", pool_id="WARDA-ICU", fencing_token=2)
+    assert domain_service.remove_entry(remove_ctx, entry.allocation_id, "cancelled") is True
+    with pytest.raises(AppException) as mismatch:
+        domain_service.remove_entry(remove_ctx, entry.allocation_id, "promoted")
+    assert mismatch.value.code == "IDEMPOTENCY_MISMATCH"
+
+    second_operation = MutationContext(operation_id="remove-distinct", lock_id="lk-2", owner_id="inst-2", pool_id="WARDA-ICU", fencing_token=3)
+    with pytest.raises(AppException) as unknown:
+        domain_service.remove_entry(second_operation, entry.allocation_id, "cancelled")
+    assert unknown.value.code == "OUTCOME_UNKNOWN"
+    first_record = domain_service.repo._queue_operation_results["remove-conflict"]
+    second_record = domain_service.repo._queue_operation_results["remove-distinct"]
+    assert first_record["state"] == "COMPLETED" and first_record["result_success"] is True
+    assert second_record["state"] == "OUTCOME_UNKNOWN" and second_record["result_success"] is None
+
+def test_remove_entry_unknown_is_not_reexecuted_if_queue_entry_later_appears(domain_service):
+    remove_ctx = MutationContext(operation_id="remove-legacy-unknown", lock_id="lk-1", owner_id="inst-1", pool_id="WARDA-ICU", fencing_token=1)
+    with pytest.raises(AppException) as first:
+        domain_service.remove_entry(remove_ctx, "alloc-legacy-unknown", "cancelled")
+    assert first.value.code == "OUTCOME_UNKNOWN"
+    domain_service.set_triage("adm-legacy-unknown", 1, "WARDA-ICU")
+    enqueue_ctx = MutationContext(operation_id="enqueue-later", lock_id="lk-2", owner_id="inst-2", pool_id="WARDA-ICU", fencing_token=2)
+    domain_service.enqueue(enqueue_ctx, "alloc-legacy-unknown", "adm-legacy-unknown")
+    fresh_retry_ctx = MutationContext(operation_id=remove_ctx.operation_id, lock_id="lk-3", owner_id="inst-3", pool_id="WARDA-ICU", fencing_token=3)
+    with pytest.raises(AppException) as retry:
+        domain_service.remove_entry(fresh_retry_ctx, "alloc-legacy-unknown", "cancelled")
+    assert retry.value.code == "OUTCOME_UNKNOWN"
+    assert domain_service.peek_next("WARDA-ICU").allocation_id == "alloc-legacy-unknown"
+
+def test_remove_entry_pool_fence_is_atomic_and_equal_token_requires_same_lock(domain_service):
+    domain_service.set_triage("adm-fence-a", 1, "WARDA-ICU")
+    domain_service.set_triage("adm-fence-b", 2, "WARDA-ICU")
+    enqueue_ctx = MutationContext(operation_id="enqueue-fence", lock_id="lk-1", owner_id="inst-1", pool_id="WARDA-ICU", fencing_token=1)
+    first, _ = domain_service.enqueue(enqueue_ctx, "alloc-fence-a", "adm-fence-a")
+    enqueue_ctx_b = MutationContext(operation_id="enqueue-fence-b", lock_id="lk-1", owner_id="inst-1", pool_id="WARDA-ICU", fencing_token=1)
+    second, _ = domain_service.enqueue(enqueue_ctx_b, "alloc-fence-b", "adm-fence-b")
+    high = MutationContext(operation_id="remove-high", lock_id="lk-high", owner_id="owner-high", pool_id="WARDA-ICU", fencing_token=10)
+    assert domain_service.remove_entry(high, first.allocation_id, "done")
+    stale = MutationContext(operation_id="remove-stale", lock_id="lk-low", owner_id="owner-low", pool_id="WARDA-ICU", fencing_token=9)
+    with pytest.raises(AppException) as lower:
+        domain_service.repo.remove_waitlist_entry(stale, second.allocation_id, "done")
+    assert lower.value.code == "FAILED_PRECONDITION"
+    equal_wrong_lock = MutationContext(operation_id="remove-equal", lock_id="different", owner_id="owner-high", pool_id="WARDA-ICU", fencing_token=10)
+    with pytest.raises(AppException) as identity:
+        domain_service.repo.remove_waitlist_entry(equal_wrong_lock, second.allocation_id, "done")
+    assert identity.value.code == "FAILED_PRECONDITION"
+    assert domain_service.repo.get_waitlist_entry(second.allocation_id) is not None
+
 def test_grpc_servicer(domain_service):
     servicer = TriageGrpcServicer(domain_service)
     domain_service.set_triage("adm-grpc", 2, "WARDA-ICU")
@@ -163,6 +234,7 @@ def test_grpc_servicer(domain_service):
     assert peek_resp.entry.allocation_id == "alloc-grpc"
 
     # Test RemoveEntry
-    rem_req = triage_pb2.RemoveWaitlistEntryRequest(context=ctx, allocation_id="alloc-grpc", reason="promoted")
+    remove_ctx = MutationContext(operation_id="op-g-remove", lock_id="lk-1", owner_id="inst-1", pool_id="WARDA-ICU", fencing_token=2)
+    rem_req = triage_pb2.RemoveWaitlistEntryRequest(context=remove_ctx, allocation_id="alloc-grpc", reason="promoted")
     rem_resp = servicer.RemoveEntry(rem_req, MockContext())
     assert rem_resp.success

@@ -18,7 +18,7 @@ from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from services.bed_allocation.clients.base import (
-    BedRegistryClient, LockCoordinatorClient, PatientRegistryClient,
+    BedDto, BedRegistryClient, LockCoordinatorClient, PatientRegistryClient,
     StaffSchedulerClient, TriageClient
 )
 from services.bed_allocation.db import (
@@ -186,13 +186,23 @@ class BedAllocationDomainService:
     def _mark_recovering(self, allocation_id: str, action: str, operation_id: str, step: str, error: Exception) -> AllocationResponse:
         # Store the action and exception class only; downstream text can contain
         # identifiers or secrets and is not needed to resume by stable operation ID.
+        outcome_unknown = isinstance(error, AppException) and error.code == "OUTCOME_UNKNOWN"
+        durable_action = "RECONCILIATION_REQUIRED" if outcome_unknown else action
         self._record_step(
-            allocation_id, action, operation_id, step, "UNCERTAIN",
-            {"error_type": type(error).__name__}, allocation_status="RECOVERING",
+            allocation_id, durable_action, operation_id, step, "UNCERTAIN",
+            {"error_type": type(error).__name__, "error_code": getattr(error, "code", None)}, allocation_status="RECOVERING",
         )
         with self.session_factory() as session:
             allocation = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
-            allocation.recovery_claim_until = datetime.now(timezone.utc)
+            if outcome_unknown:
+                workflow = json.loads(allocation.workflow_data or "{}")
+                workflow["reconciliation_needed"] = True
+                workflow["reconciliation_reason"] = "TRIAGE_OUTCOME_UNKNOWN"
+                allocation.workflow_data = json.dumps(workflow)
+                allocation.recovery_claim_owner = None
+                allocation.recovery_claim_until = None
+            else:
+                allocation.recovery_claim_until = datetime.now(timezone.utc)
             session.commit()
             return self._allocation_response(allocation)
 
@@ -583,6 +593,7 @@ class BedAllocationDomainService:
                 session.query(AllocationModel)
                 .filter(
                     AllocationModel.pending_action.isnot(None),
+                    AllocationModel.pending_action != "RECONCILIATION_REQUIRED",
                     or_(
                         AllocationModel.status.in_(["PROCESSING", "RECOVERING"]),
                         (AllocationModel.status == "RELEASED") & (AllocationModel.pending_action == "PROMOTE"),
@@ -986,7 +997,17 @@ class BedAllocationDomainService:
             with self.session_factory() as session:
                 record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
                 record.status = "RELEASED"
-                record.pending_action = "PROMOTE"
+                if isinstance(error, AppException) and error.code == "OUTCOME_UNKNOWN":
+                    record.pending_action = "RECONCILIATION_REQUIRED"
+                    workflow = json.loads(record.workflow_data or "{}")
+                    workflow["reconciliation_needed"] = True
+                    workflow["reconciliation_reason"] = "TRIAGE_OUTCOME_UNKNOWN"
+                    record.workflow_data = json.dumps(workflow)
+                    record.recovery_claim_owner = None
+                    record.recovery_claim_until = None
+                else:
+                    record.pending_action = "PROMOTE"
+                    record.recovery_claim_until = datetime.now(timezone.utc)
                 session.commit()
             return None
 

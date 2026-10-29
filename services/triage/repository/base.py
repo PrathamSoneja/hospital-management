@@ -2,8 +2,20 @@
 Abstract repository interface for Triage and Waitlist persistence.
 """
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import List, Optional, Tuple
 from services.triage.models import TriageRecord, WaitlistEntry
+
+@dataclass(frozen=True)
+class QueueMutationResult:
+    success: bool
+    replayed: bool
+
+@dataclass(frozen=True)
+class QueueEnqueueResult:
+    entry: WaitlistEntry
+    already_existed: bool
+    replayed: bool
 
 class TriageRepository(ABC):
     @abstractmethod
@@ -23,7 +35,7 @@ class TriageRepository(ABC):
         pass
 
     @abstractmethod
-    def enqueue_waitlist(self, entry: WaitlistEntry) -> Tuple[WaitlistEntry, bool]:
+    def enqueue_waitlist(self, context, entry: WaitlistEntry) -> QueueEnqueueResult:
         """Returns (entry, already_existed)"""
         pass
 
@@ -32,7 +44,7 @@ class TriageRepository(ABC):
         pass
 
     @abstractmethod
-    def remove_waitlist_entry(self, allocation_id: str) -> bool:
+    def remove_waitlist_entry(self, context, allocation_id: str, reason: str) -> QueueMutationResult:
         pass
 
     @abstractmethod
