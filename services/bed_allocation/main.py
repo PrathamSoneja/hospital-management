@@ -121,4 +121,4 @@ app = build_app()
 if __name__ == "__main__":
     rest_port = int(os.environ.get("ALLOCATION_REST_PORT", 8002))
     host = os.environ.get("ALLOCATION_REST_HOST", "0.0.0.0")
-    uvicorn.run("services.bed-allocation.main:app", host=host, port=rest_port, reload=False)
+    uvicorn.run("services.bed_allocation.main:app", host=host, port=rest_port, reload=False)

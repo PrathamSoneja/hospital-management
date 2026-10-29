@@ -81,6 +81,8 @@ class FakeBedRegistryClient(BedRegistryClient):
         self.beds: Dict[str, BedDto] = {}
         self.operations: Dict[str, Tuple[str, str]] = {}
         self.simulate_allocate_failure = False
+        self.simulate_release_failure = False
+        self.simulate_compensation_failure = False
 
     def seed_bed(self, bed_id: str, pool_id: str, ward: str = "ICU-A"):
         self.beds[bed_id] = BedDto(
@@ -112,6 +114,8 @@ class FakeBedRegistryClient(BedRegistryClient):
     def release_bed(self, context, bed_id: str, allocation_id: str) -> Tuple[bool, str]:
         if context.operation_id in self.operations:
             return True, ""
+        if self.simulate_release_failure or (self.simulate_compensation_failure and "prom-compensate-bed" in context.operation_id):
+            return False, "Simulated bed release failure"
         bed = self.beds.get(bed_id)
         if not bed:
             return False, f"Bed {bed_id} not found"
@@ -134,6 +138,7 @@ class FakeStaffSchedulerClient(StaffSchedulerClient):
         self.simulate_capacity_exhausted = False
         self.simulate_assignment_failure = False
         self.simulate_uncertain_outcome = False
+        self.simulate_uncertain_release = False
 
     def set_capacity(self, pool_id: str, count: int):
         self.capacity[pool_id] = count
@@ -172,6 +177,13 @@ class FakeStaffSchedulerClient(StaffSchedulerClient):
     def release_assignment(self, context, staff_assignment_id: str, allocation_id: str) -> Tuple[bool, str]:
         if context.operation_id in self.release_operations:
             return True, ""
+        if self.simulate_uncertain_release:
+            raise AppException(
+                code="DEADLINE_EXCEEDED",
+                message="Staff release outcome is uncertain",
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                retryable=True
+            )
         if staff_assignment_id in self.assignments:
             expected_alloc, _ = self.assignments[staff_assignment_id]
             if expected_alloc == allocation_id:
@@ -181,6 +193,7 @@ class FakeStaffSchedulerClient(StaffSchedulerClient):
                 self.capacity[context.pool_id] = cap + 1
                 return True, ""
             return False, f"Assignment owned by {expected_alloc}, not {allocation_id}"
+        self.release_operations.add(context.operation_id)
         return True, "" # Idempotent release
 
 class DirectTriageClient(TriageClient):

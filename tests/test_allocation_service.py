@@ -344,6 +344,7 @@ def test_postgres_concurrent_requests_use_partial_unique_index():
         patient_client = FakePatientRegistryClient()
         patient_client.seed_admission("adm-pg-race", "pat-pg-race", "OPEN")
         patient_client.seed_admission("adm-pg-replay", "pat-pg-replay", "OPEN")
+        patient_client.seed_admission("adm-pg-worker", "pat-pg-worker", "OPEN")
         request_barrier = threading.Barrier(2)
 
         class BarrierPatientClient:
@@ -356,6 +357,7 @@ def test_postgres_concurrent_requests_use_partial_unique_index():
         triage_domain = TriageDomainService(triage_repo, MockFencingValidator(True))
         triage_domain.set_triage("adm-pg-race", 1, "WARDA-ICU")
         triage_domain.set_triage("adm-pg-replay", 1, "WARDA-ICU")
+        triage_domain.set_triage("adm-pg-worker", 1, "WARDA-ICU")
         lock_client = FakeLockCoordinatorClient()
         lock_calls = [0]
         original_acquire = lock_client.acquire
@@ -366,13 +368,15 @@ def test_postgres_concurrent_requests_use_partial_unique_index():
         bed_client = FakeBedRegistryClient()
         bed_client.seed_bed("bed-pg-race-1", "WARDA-ICU")
         bed_client.seed_bed("bed-pg-race-2", "WARDA-ICU")
+        bed_client.seed_bed("bed-pg-worker", "WARDA-ICU")
+        staff_client = FakeStaffSchedulerClient(initial_capacity=3)
         service = BedAllocationDomainService(
             session_factory=postgres_session_factory,
             patient_client=BarrierPatientClient(),
             triage_client=DirectTriageClient(triage_domain),
             lock_client=lock_client,
             bed_client=bed_client,
-            staff_client=FakeStaffSchedulerClient(initial_capacity=2),
+            staff_client=staff_client,
             owner_id="postgres-concurrency-test"
         )
 
@@ -425,6 +429,125 @@ def test_postgres_concurrent_requests_use_partial_unique_index():
             )
         assert mismatch.value.status_code == 409
         assert mismatch.value.code == "IDEMPOTENCY_MISMATCH"
+
+        # Two workers race for one expired PostgreSQL lease. SKIP LOCKED lets
+        # one own the recovery; the downstream operation remains deduplicated.
+        request_barrier = threading.Barrier(1)
+        staff_client.simulate_uncertain_outcome = True
+        interrupted = service.create_allocation(
+            CreateAllocationRequest(admission_id="adm-pg-worker", pool_id="WARDA-ICU"),
+            request_id="req-pg-worker", idempotency_key="idemp-pg-worker",
+        )
+        assert interrupted.status == "RECOVERING"
+        staff_client.simulate_uncertain_outcome = False
+        with postgres_session_factory() as session:
+            row = session.query(AllocationModel).filter_by(allocation_id=interrupted.allocation_id).one()
+            row.recovery_claim_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+            session.commit()
+        second_worker = BedAllocationDomainService(
+            session_factory=postgres_session_factory,
+            patient_client=service.patient_client, triage_client=service.triage_client,
+            lock_client=lock_client, bed_client=bed_client, staff_client=staff_client,
+            owner_id="postgres-recovery-worker-2",
+        )
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            claims = list(executor.map(lambda worker: worker.recover_pending(), (service, second_worker)))
+        assert sum(claims) == 1
+        assert second_worker.get_allocation(interrupted.allocation_id).status == "ALLOCATED"
+        assert sum(1 for allocation_id, _ in staff_client.assignments.values() if allocation_id == interrupted.allocation_id) == 1
+
+        staff_client.simulate_uncertain_release = True
+        uncertain_release = service.release_allocation(interrupted.allocation_id, "done", "req-pg-release-uncertain", "idemp-pg-release-uncertain")
+        assert uncertain_release.status == "RECOVERING"
+        assert bed_client.beds[second_worker.get_allocation(interrupted.allocation_id).bed_id].current_allocation_id is None
+        assert any(allocation_id == interrupted.allocation_id for allocation_id, _ in staff_client.assignments.values())
+        staff_client.simulate_uncertain_release = False
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            release_claims = list(executor.map(lambda worker: worker.recover_pending(), (service, second_worker)))
+        assert sum(release_claims) == 1
+        assert second_worker.get_allocation(interrupted.allocation_id).status == "RELEASED"
+        assert not any(allocation_id == interrupted.allocation_id for allocation_id, _ in staff_client.assignments.values())
+
+        # PostgreSQL-backed release commits before a failed promotion. The
+        # waitlist stays intact and a later worker can finish the promotion.
+        patient_client.seed_admission("adm-pg-wait", "pat-pg-wait", "OPEN")
+        triage_domain.set_triage("adm-pg-wait", 1, "WARDA-ICU")
+        staff_client.simulate_capacity_exhausted = True
+        waitlisted = service.create_allocation(
+            CreateAllocationRequest(admission_id="adm-pg-wait", pool_id="WARDA-ICU"),
+            request_id="req-pg-wait", idempotency_key="idemp-pg-wait",
+        )
+        assert waitlisted.status == "WAITLISTED"
+        staff_client.simulate_capacity_exhausted = False
+        staff_client.simulate_assignment_failure = True
+        promoted_from = successes[0].allocation_id
+        released = service.release_allocation(promoted_from, "done", "req-pg-release", "idemp-pg-release")
+        assert released.status == "RELEASED"
+        assert second_worker.get_allocation(promoted_from).status == "RELEASED"
+        assert triage_domain.peek_next("WARDA-ICU").allocation_id == waitlisted.allocation_id
+        staff_client.simulate_assignment_failure = False
+        assert second_worker.recover_pending() == 1
+        assert second_worker.get_allocation(waitlisted.allocation_id).status == "ALLOCATED"
+        assert triage_domain.peek_next("WARDA-ICU") is None
+
+        patient_client.seed_admission("adm-pg-release-target", "pat-pg-release-target", "OPEN")
+        triage_domain.set_triage("adm-pg-release-target", 1, "WARDA-ICU")
+        staff_client.set_capacity("WARDA-ICU", 5)
+        another = service.create_allocation(
+            CreateAllocationRequest(admission_id="adm-pg-release-target", pool_id="WARDA-ICU"),
+            request_id="req-pg-release-target", idempotency_key="idemp-pg-release-target",
+        )
+        release_entered, release_resume = threading.Event(), threading.Event()
+        original_release_assignment = staff_client.release_assignment
+        def pause_staff_release(*args, **kwargs):
+            release_entered.set()
+            assert release_resume.wait(timeout=5)
+            return original_release_assignment(*args, **kwargs)
+        staff_client.release_assignment = pause_staff_release
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            release_future = executor.submit(
+                service.release_allocation, another.allocation_id, "done", "req-pg-release-target", "idemp-pg-release"
+            )
+            assert release_entered.wait(timeout=5)
+            replay_response = Response()
+            pending_replay = release_allocation_endpoint(
+                another.allocation_id, ReleaseRequest(reason="done"), DummyRequest(),
+                idempotency_key="idemp-pg-release", service=service, response=replay_response,
+            )
+            assert replay_response.status_code == 202
+            assert pending_replay.status == "RELEASING"
+            with pytest.raises(AppException) as mismatch:
+                service.release_allocation(another.allocation_id, "different", "req-pg-mismatch", "idemp-pg-release")
+            assert mismatch.value.code == "IDEMPOTENCY_MISMATCH"
+            with pytest.raises(AppException) as competing:
+                service.release_allocation(another.allocation_id, "done", "req-pg-other-key", "idemp-pg-other-key")
+            assert competing.value.status_code == 409
+            release_resume.set()
+            second_release = release_future.result(timeout=5)
+        staff_client.release_assignment = original_release_assignment
+        assert second_release.status == "RELEASED"
+
+        patient_client.seed_admission("adm-pg-release-target-2", "pat-pg-release-target-2", "OPEN")
+        triage_domain.set_triage("adm-pg-release-target-2", 1, "WARDA-ICU")
+        another_target = service.create_allocation(
+            CreateAllocationRequest(admission_id="adm-pg-release-target-2", pool_id="WARDA-ICU"),
+            request_id="req-pg-release-target-2", idempotency_key="idemp-pg-release-target-2",
+        )
+        service.release_allocation(another_target.allocation_id, "done", "req-pg-release-target-2", "idemp-pg-release")
+        with postgres_session_factory() as session:
+            assert session.query(IdempotencyModel).filter_by(operation="RELEASE", idempotency_key="idemp-pg-release").count() == 3
+
+        patient_client.seed_admission("adm-pg-cancel", "pat-pg-cancel", "OPEN")
+        triage_domain.set_triage("adm-pg-cancel", 1, "WARDA-ICU")
+        staff_client.simulate_capacity_exhausted = True
+        cancel_target = service.create_allocation(
+            CreateAllocationRequest(admission_id="adm-pg-cancel", pool_id="WARDA-ICU"),
+            request_id="req-pg-cancel", idempotency_key="idemp-pg-cancel-create",
+        )
+        assert cancel_target.status == "WAITLISTED"
+        cancelled = service.cancel_allocation(cancel_target.allocation_id, "transfer", "req-pg-cancel", "idemp-pg-cancel")
+        assert cancelled.status == "CANCELLED"
+        assert service.cancel_allocation(cancel_target.allocation_id, "transfer", "req-pg-cancel-retry", "idemp-pg-cancel").status == "CANCELLED"
     finally:
         if test_engine is not None:
             test_engine.dispose()
@@ -490,6 +613,208 @@ def test_cancel_waitlisted_allocation(test_setup):
     with pytest.raises(AppException) as exc:
         cancel_allocation_endpoint("alloc-fake", CancelRequest(reason="test"), DummyRequest(), idempotency_key="idemp-x", service=service)
     assert exc.value.code == "NOT_FOUND"
+
+def test_release_claim_replay_mismatch_and_target_isolation(test_setup):
+    service = test_setup["service"]
+    request = lambda admission: CreateAllocationRequest(admission_id=admission, pool_id="WARDA-ICU")
+    first = service.create_allocation(request("adm-open-1"), "r1", "create-r1")
+    second = service.create_allocation(request("adm-open-2"), "r2", "create-r2")
+    released = service.release_allocation(first.allocation_id, "done", "rr1", "shared-release-key")
+    replay = service.release_allocation(first.allocation_id, "done", "rr2", "shared-release-key")
+    assert replay.model_dump() == released.model_dump()
+    with pytest.raises(AppException) as mismatch:
+        service.release_allocation(first.allocation_id, "different", "rr3", "shared-release-key")
+    assert mismatch.value.code == "IDEMPOTENCY_MISMATCH"
+    # The target ID is part of scope, so this key is independent for another allocation.
+    other = service.release_allocation(second.allocation_id, "done", "rr4", "shared-release-key")
+    assert other.allocation_id == second.allocation_id
+    with test_setup["session_factory"]() as session:
+        assert session.query(IdempotencyModel).filter_by(operation="RELEASE", target_id=first.allocation_id, idempotency_key="shared-release-key").count() == 1
+        assert session.query(IdempotencyModel).filter_by(operation="RELEASE", target_id=second.allocation_id, idempotency_key="shared-release-key").count() == 1
+
+def test_release_matching_in_progress_retry_returns_202(test_setup):
+    service = test_setup["service"]
+    allocation = service.create_allocation(CreateAllocationRequest(admission_id="adm-open-1", pool_id="WARDA-ICU"), "r1", "create-r1")
+    staff = test_setup["staff"]
+    entered, resume = threading.Event(), threading.Event()
+    original = staff.release_assignment
+    def pause_release(*args, **kwargs):
+        entered.set()
+        assert resume.wait(timeout=5)
+        return original(*args, **kwargs)
+    staff.release_assignment = pause_release
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first_call = executor.submit(service.release_allocation, allocation.allocation_id, "done", "rel-1", "rel-processing")
+        assert entered.wait(timeout=5)
+        response = Response()
+        retry = release_allocation_endpoint(allocation.allocation_id, ReleaseRequest(reason="done"), DummyRequest(), idempotency_key="rel-processing", service=service, response=response)
+        assert response.status_code == 202
+        assert response.headers["Location"] == f"/api/v1/allocations/{allocation.allocation_id}"
+        assert retry.status == "RELEASING"
+        resume.set()
+        result = first_call.result(timeout=5)
+    assert result.status == "RELEASED"
+
+def test_release_recovers_when_bed_released_but_staff_outcome_unknown(test_setup):
+    service = test_setup["service"]
+    allocation = service.create_allocation(CreateAllocationRequest(admission_id="adm-open-1", pool_id="WARDA-ICU"), "r1", "create-r1")
+    staff, beds = test_setup["staff"], test_setup["bed"]
+    staff.simulate_uncertain_release = True
+    accepted = service.release_allocation(allocation.allocation_id, "done", "release-unknown", "release-unknown-key")
+    assert accepted.status == "RECOVERING"
+    assert beds.beds[allocation.bed_id].current_allocation_id is None
+    assert allocation.staff_assignment_id in staff.assignments
+    staff.simulate_uncertain_release = False
+    restarted = BedAllocationDomainService(
+        service.session_factory, service.patient_client, service.triage_client,
+        service.lock_client, beds, staff, owner_id="release-recovery-instance",
+    )
+    assert restarted.recover_pending() == 1
+    current = restarted.get_allocation(allocation.allocation_id)
+    assert current.status == "RELEASED"
+    assert allocation.staff_assignment_id not in staff.assignments
+
+def test_release_commit_survives_promotion_failure_and_preserves_queue(test_setup):
+    service = test_setup["service"]
+    create = lambda admission, key: service.create_allocation(CreateAllocationRequest(admission_id=admission, pool_id="WARDA-ICU"), key, key)
+    first = create("adm-open-1", "first")
+    create("adm-open-2", "second")
+    waiting = create("adm-open-3", "third")
+    staff = test_setup["staff"]
+    staff.simulate_assignment_failure = True
+    released = service.release_allocation(first.allocation_id, "done", "release-promo", "release-promo-key")
+    assert released.status == "RELEASED"
+    assert service.get_allocation(first.allocation_id).status == "RELEASED"
+    assert test_setup["triage_domain"].peek_next("WARDA-ICU").allocation_id == waiting.allocation_id
+    assert test_setup["bed"].beds[first.bed_id].current_allocation_id is None
+    with service.session_factory() as session:
+        release = session.query(AllocationModel).filter_by(allocation_id=first.allocation_id).one()
+        assert release.pending_action == "PROMOTE"
+        assert session.query(IdempotencyModel).filter_by(operation="RELEASE", target_id=first.allocation_id, idempotency_key="release-promo-key").one().state == "COMPLETED"
+    staff.simulate_assignment_failure = False
+    assert service.recover_pending() == 1
+    assert service.get_allocation(waiting.allocation_id).status == "ALLOCATED"
+    assert test_setup["triage_domain"].peek_next("WARDA-ICU") is None
+
+def test_cancel_claim_is_durable_before_queue_removal_and_retryable(test_setup):
+    service = test_setup["service"]
+    create = lambda admission, key: service.create_allocation(CreateAllocationRequest(admission_id=admission, pool_id="WARDA-ICU"), key, key)
+    create("adm-open-1", "first")
+    create("adm-open-2", "second")
+    waiting = create("adm-open-3", "third")
+    triage = test_setup["triage"]
+    entered, resume = threading.Event(), threading.Event()
+    original = triage.remove_entry
+    def pause_remove(*args, **kwargs):
+        with service.session_factory() as session:
+            record = session.query(AllocationModel).filter_by(allocation_id=waiting.allocation_id).one()
+            claim = session.query(IdempotencyModel).filter_by(operation="CANCEL", target_id=waiting.allocation_id, idempotency_key="cancel-key").one()
+            assert record.status == "CANCELLING"
+            assert claim.state == "IN_PROGRESS"
+        entered.set()
+        assert resume.wait(timeout=5)
+        return original(*args, **kwargs)
+    triage.remove_entry = pause_remove
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            cancel_allocation_endpoint, waiting.allocation_id, CancelRequest(reason="transfer"), DummyRequest(),
+            idempotency_key="cancel-key", service=service,
+        )
+        assert entered.wait(timeout=5)
+        response = Response()
+        replay = cancel_allocation_endpoint(
+            waiting.allocation_id, CancelRequest(reason="transfer"), DummyRequest(),
+            idempotency_key="cancel-key", service=service, response=response,
+        )
+        assert replay.status == "CANCELLING"
+        assert response.status_code == 202
+        assert response.headers["Location"] == f"/api/v1/allocations/{waiting.allocation_id}"
+        resume.set()
+        cancelled = future.result(timeout=5)
+    triage.remove_entry = original
+    assert cancelled.status == "CANCELLED"
+    assert service.cancel_allocation(waiting.allocation_id, "transfer", "cancel-r2", "cancel-key").status == "CANCELLED"
+
+def test_cancel_recovers_after_unknown_remove_outcome(test_setup):
+    service = test_setup["service"]
+    create = lambda admission, key: service.create_allocation(CreateAllocationRequest(admission_id=admission, pool_id="WARDA-ICU"), key, key)
+    create("adm-open-1", "first")
+    create("adm-open-2", "second")
+    waiting = create("adm-open-3", "third")
+    triage = test_setup["triage"]
+    original = triage.remove_entry
+    triage.remove_entry = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("injected unknown remove result"))
+    accepted = service.cancel_allocation(waiting.allocation_id, "transfer", "cancel-unknown", "cancel-unknown-key")
+    triage.remove_entry = original
+    assert accepted.status == "RECOVERING"
+    with service.session_factory() as session:
+        claim = session.query(IdempotencyModel).filter_by(operation="CANCEL", target_id=waiting.allocation_id, idempotency_key="cancel-unknown-key").one()
+        assert claim.state == "IN_PROGRESS"
+    assert service.recover_pending() == 1
+    assert service.get_allocation(waiting.allocation_id).status == "CANCELLED"
+    assert test_setup["triage_domain"].peek_next("WARDA-ICU") is None
+
+def test_crash_after_release_commit_keeps_release_and_promotion_claimable(test_setup):
+    service = test_setup["service"]
+    first = service.create_allocation(CreateAllocationRequest(admission_id="adm-open-1", pool_id="WARDA-ICU"), "r1", "create-r1")
+    original = service._promote_next_locked
+    def crash(*args, **kwargs):
+        raise RuntimeError("injected crash after release commit")
+    service._promote_next_locked = crash
+    result = service.release_allocation(first.allocation_id, "done", "r-release", "release-crash")
+    service._promote_next_locked = original
+    assert result.status == "RELEASED"
+    with service.session_factory() as session:
+        record = session.query(AllocationModel).filter_by(allocation_id=first.allocation_id).one()
+        assert record.status == "RELEASED"
+        assert record.pending_action == "PROMOTE"
+    assert service.recover_pending() == 1
+    assert service.get_allocation(first.allocation_id).status == "RELEASED"
+
+def test_release_retries_after_remote_effect_before_outcome_commit(test_setup):
+    service = test_setup["service"]
+    allocation = service.create_allocation(CreateAllocationRequest(admission_id="adm-open-1", pool_id="WARDA-ICU"), "r1", "create-r1")
+    beds = test_setup["bed"]
+    original = beds.release_bed
+    did_effect = {"value": False}
+    def effect_then_timeout(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if not did_effect["value"]:
+            did_effect["value"] = True
+            raise RuntimeError("injected lost acknowledgement after bed release")
+        return result
+    beds.release_bed = effect_then_timeout
+    accepted = service.release_allocation(allocation.allocation_id, "done", "r-release", "release-effect-crash")
+    assert accepted.status == "RECOVERING"
+    assert beds.beds[allocation.bed_id].current_allocation_id is None
+    beds.release_bed = original
+    assert service.recover_pending() == 1
+    assert service.get_allocation(allocation.allocation_id).status == "RELEASED"
+    assert did_effect["value"]
+
+def test_promotion_compensation_failure_keeps_queue_and_releases_only_owned_bed(test_setup):
+    service = test_setup["service"]
+    create = lambda admission, key: service.create_allocation(CreateAllocationRequest(admission_id=admission, pool_id="WARDA-ICU"), key, key)
+    first = create("adm-open-1", "first")
+    create("adm-open-2", "second")
+    waiting = create("adm-open-3", "third")
+    staff, beds = test_setup["staff"], test_setup["bed"]
+    staff.simulate_assignment_failure = True
+    beds.simulate_compensation_failure = True
+    assert service.release_allocation(first.allocation_id, "done", "r-release", "release-comp-fail").status == "RELEASED"
+    assert beds.beds["bed-01"].current_allocation_id == waiting.allocation_id
+    assert test_setup["triage_domain"].peek_next("WARDA-ICU").allocation_id == waiting.allocation_id
+    with service.session_factory() as session:
+        record = session.query(AllocationModel).filter_by(allocation_id=first.allocation_id).one()
+        assert record.status == "RELEASED"
+        assert record.pending_action == "PROMOTE"
+    beds.simulate_compensation_failure = False
+    staff.simulate_assignment_failure = False
+    assert service.recover_pending() == 1
+    assert beds.beds["bed-01"].current_allocation_id is None
+    assert test_setup["triage_domain"].peek_next("WARDA-ICU").allocation_id == waiting.allocation_id
+    assert service.recover_pending() == 1
+    assert service.get_allocation(waiting.allocation_id).status == "ALLOCATED"
 
 def test_transactional_outbox_events_and_dispatcher(test_setup):
     service = test_setup["service"]

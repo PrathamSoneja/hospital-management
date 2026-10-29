@@ -582,8 +582,11 @@ class BedAllocationDomainService:
             candidates = (
                 session.query(AllocationModel)
                 .filter(
-                    AllocationModel.status.in_(["PROCESSING", "RECOVERING"]),
                     AllocationModel.pending_action.isnot(None),
+                    or_(
+                        AllocationModel.status.in_(["PROCESSING", "RECOVERING"]),
+                        (AllocationModel.status == "RELEASED") & (AllocationModel.pending_action == "PROMOTE"),
+                    ),
                     or_(AllocationModel.recovery_claim_until.is_(None), AllocationModel.recovery_claim_until <= now),
                 )
                 .order_by(AllocationModel.updated_at.asc(), AllocationModel.allocation_id.asc())
@@ -596,7 +599,8 @@ class BedAllocationDomainService:
                 record.recovery_claim_owner = worker_id
                 record.recovery_claim_until = now + timedelta(seconds=lease_seconds)
                 record.recovery_attempts = (record.recovery_attempts or 0) + 1
-                record.status = "RECOVERING"
+                if record.status != "RELEASED":
+                    record.status = "RECOVERING"
                 record.updated_at = now
                 claimed_ids.append(record.allocation_id)
             session.commit()
@@ -606,24 +610,51 @@ class BedAllocationDomainService:
                 record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
                 if not record or record.pending_action is None:
                     continue
-                admission_id = record.admission_id
+                data = json.loads(record.workflow_data or "{}")
+                action = data.get("action", "CREATE")
+                pending_action = record.pending_action
+                request_id = data.get("request_id", f"recovery-{uuid.uuid4().hex[:12]}")
+                key = data.get("idempotency_key")
                 pool_id = record.pool_id
-                endpoint = "POST /api/v1/allocations"
-                payload = {"admission_id": admission_id, "pool_id": pool_id}
-                claim = session.query(IdempotencyModel).filter_by(
-                    method="POST", operation="CREATE", target_id=admission_id,
-                    allocation_id=allocation_id,
-                ).first()
-                key = claim.idempotency_key if claim else None
+                if not key:
+                    operation_name = {"CREATE": "CREATE", "RELEASE": "RELEASE", "CANCEL": "CANCEL"}.get(action)
+                    target_id = record.admission_id if action == "CREATE" else allocation_id
+                    claim = session.query(IdempotencyModel).filter_by(
+                        method="POST", operation=operation_name, target_id=target_id,
+                        allocation_id=allocation_id,
+                    ).first()
+                    key = claim.idempotency_key if claim else None
+                if action == "CREATE":
+                    payload = {"admission_id": record.admission_id, "pool_id": pool_id}
+                else:
+                    payload = {"reason": data.get("reason", "recovery")}
             try:
-                self._run_create_workflow(
-                    allocation_id, f"recovery-{uuid.uuid4().hex[:12]}", key, payload
-                )
+                if action == "CREATE":
+                    self._run_create_workflow(allocation_id, request_id, key, payload)
+                elif action == "RELEASE" and pending_action == "PROMOTE":
+                    self._resume_promotion(allocation_id, request_id)
+                elif action == "RELEASE":
+                    self._resume_release(allocation_id, request_id, key, payload)
+                elif action == "CANCEL":
+                    self._resume_cancel(allocation_id, request_id, key, payload)
             except Exception:
                 # Leave the durable row claimable on its lease timeout. Reconciliation
                 # failures must never be converted into terminal allocation failures.
                 continue
         return len(claimed_ids)
+
+    def _resume_promotion(self, allocation_id, request_id):
+        with self.session_factory() as session:
+            record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
+            pool_id = record.pool_id
+        try:
+            lease = self.lock_client.acquire(pool_id, self.owner_id, f"acq-promotion-{uuid.uuid4().hex}", 10000, 5000)
+        except Exception:
+            return
+        try:
+            self._promote_next_locked(allocation_id, lease, request_id)
+        finally:
+            self.lock_client.release(lease.lock_id, lease.owner_id)
 
     def _allocation_snapshot(self, allocation_id: str) -> AllocationResponse:
         with self.session_factory() as session:
@@ -680,266 +711,384 @@ class BedAllocationDomainService:
         ALLOCATION_PROCESSING_SECONDS.labels(service="bed-allocation", pool_id=response.pool_id, outcome=final_status).observe(time.perf_counter() - started_at)
         return response
 
-    def release_allocation(self, allocation_id: str, reason: str, request_id: str, idempotency_key: Optional[str] = None) -> ReleaseResponse:
+    def _claim_mutating_action(self, allocation_id, endpoint, payload, state, action, workflow):
+        scope = self._idempotency_scope(endpoint, payload)
+        key = workflow.get("idempotency_key")
         with self.session_factory() as session:
-            cached = self._check_idempotency(session, idempotency_key, f"POST /api/v1/allocations/{allocation_id}/release", {"reason": reason})
-            if cached:
-                return ReleaseResponse(**cached)
-
-            alloc = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
-            if not alloc:
-                raise AppException(
-                    code="NOT_FOUND",
-                    message=f"Allocation '{allocation_id}' does not exist",
-                    status_code=status.HTTP_404_NOT_FOUND
-                )
-
-            # Idempotent release check
-            if alloc.status == "RELEASED":
-                return ReleaseResponse(allocation_id=allocation_id, status="RELEASED", promoted_allocation_id=None)
-
-            if alloc.status != "ALLOCATED":
-                raise AppException(
-                    code="STATE_CONFLICT",
-                    message=f"Cannot release allocation in '{alloc.status}' status (must be ALLOCATED)",
-                    status_code=status.HTTP_409_CONFLICT
-                )
-
-            pool_id = alloc.pool_id
-            bed_id = alloc.bed_id
-            staff_asgn_id = alloc.staff_assignment_id
-            admission_id = alloc.admission_id
-
-        # Acquire distributed pool lock
-        lease = self.lock_client.acquire(
-            pool_id=pool_id,
-            owner_id=self.owner_id,
-            acquire_id=f"acq-rel-{allocation_id}",
-            lease_ms=10000,
-            wait_timeout_ms=5000
-        )
-
-        promoted_allocation_id: Optional[str] = None
-        try:
-            # 1. Release Bed
-            ctx_rel_bed = MutationContext(
-                operation_id=f"{allocation_id}:release-bed",
-                request_id=request_id,
-                pool_id=pool_id,
-                lock_id=lease.lock_id,
-                owner_id=lease.owner_id,
-                fencing_token=lease.fencing_token
-            )
-            if bed_id:
-                self.bed_client.release_bed(ctx_rel_bed, bed_id, allocation_id)
-
-            # 2. Release Staff
-            ctx_rel_staff = MutationContext(
-                operation_id=f"{allocation_id}:release-staff",
-                request_id=request_id,
-                pool_id=pool_id,
-                lock_id=lease.lock_id,
-                owner_id=lease.owner_id,
-                fencing_token=lease.fencing_token
-            )
-            if staff_asgn_id:
-                self.staff_client.release_assignment(ctx_rel_staff, staff_asgn_id, allocation_id)
-
-            # 3. Attempt promotion of next waiting patient
-            peeked = self.triage_client.peek_next(pool_id, request_id)
-            if peeked:
-                # Try to allocate bed for peeked waiting allocation
-                candidate_alloc_id = peeked.allocation_id
-                # Check beds and staff
-                available_beds = self.bed_client.list_available_beds(pool_id, request_id)
-                has_cap, _ = self.staff_client.check_capacity(pool_id, request_id)
-                if available_beds and has_cap:
-                    target_bed = available_beds[0]
-                    ctx_prom_bed = MutationContext(
-                        operation_id=f"{candidate_alloc_id}:prom-bed",
-                        request_id=request_id,
-                        pool_id=pool_id,
-                        lock_id=lease.lock_id,
-                        owner_id=lease.owner_id,
-                        fencing_token=lease.fencing_token
+            cached = self._check_idempotency(session, key, endpoint, payload)
+            if cached is not None:
+                return cached
+            record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).with_for_update().first()
+            if record is None:
+                raise AppException("NOT_FOUND", f"Allocation '{allocation_id}' does not exist", status.HTTP_404_NOT_FOUND)
+            cached = self._check_idempotency(session, key, endpoint, payload)
+            if cached is not None:
+                return cached
+            allowed_initial = "ALLOCATED" if action == "RELEASE_BED" else "WAITLISTED"
+            if record.status != allowed_initial:
+                raise AppException("STATE_CONFLICT", f"Cannot start {action.lower()} in '{record.status}' status", status.HTTP_409_CONFLICT)
+            if record.pending_action:
+                raise AppException("STATE_CONFLICT", f"Allocation has pending action '{record.pending_action}'", status.HTTP_409_CONFLICT)
+            record.status = state
+            record.pending_action = action
+            record.workflow_data = json.dumps(workflow)
+            record.recovery_claim_owner = self.owner_id
+            record.recovery_claim_until = datetime.now(timezone.utc) + timedelta(seconds=60)
+            record.updated_at = datetime.now(timezone.utc)
+            if key:
+                claim = session.query(IdempotencyModel).filter_by(**scope, idempotency_key=key).first()
+                if claim is None:
+                    claim = IdempotencyModel(
+                        **scope, idempotency_key=key, endpoint=endpoint,
+                        request_hash=self._hash_payload(payload), state="IN_PROGRESS",
+                        allocation_id=allocation_id, action_id=f"{allocation_id}:{action.lower()}",
+                        created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc),
                     )
-                    bed_ok, _, _ = self.bed_client.allocate_bed(ctx_prom_bed, target_bed.bed_id, candidate_alloc_id)
-                    if bed_ok:
-                        ctx_prom_staff = MutationContext(
-                            operation_id=f"{candidate_alloc_id}:prom-staff",
-                            request_id=request_id,
-                            pool_id=pool_id,
-                            lock_id=lease.lock_id,
-                            owner_id=lease.owner_id,
-                            fencing_token=lease.fencing_token
-                        )
-                        staff_ok, p_asgn_id, _, _ = self.staff_client.assign_staff(ctx_prom_staff, candidate_alloc_id, target_bed.bed_id)
-                        if staff_ok:
-                            # Remove from waitlist only after successful promotion
-                            ctx_rem = MutationContext(
-                                operation_id=f"{candidate_alloc_id}:prom-remove",
-                                request_id=request_id,
-                                pool_id=pool_id,
-                                lock_id=lease.lock_id,
-                                owner_id=lease.owner_id,
-                                fencing_token=lease.fencing_token
-                            )
-                            self.triage_client.remove_entry(ctx_rem, candidate_alloc_id, "promoted")
-                            promoted_allocation_id = candidate_alloc_id
+                    session.add(claim)
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+                with self.session_factory() as retry_session:
+                    winner = self._check_idempotency(retry_session, key, endpoint, payload)
+                    if winner is not None:
+                        return winner
+                raise AppException("ACTIVE_ALLOCATION_EXISTS", "A competing action claimed this allocation", status.HTTP_409_CONFLICT)
+            return None
 
-                            # Update promoted allocation record
-                            with self.session_factory() as session:
-                                p_rec = session.query(AllocationModel).filter_by(allocation_id=candidate_alloc_id).first()
-                                if p_rec:
-                                    p_rec.status = "ALLOCATED"
-                                    p_rec.bed_id = target_bed.bed_id
-                                    p_rec.staff_assignment_id = p_asgn_id
-                                    p_rec.waitlist_entry_id = None
-                                    p_rec.updated_at = datetime.now(timezone.utc)
-                                session.commit()
-                        else:
-                            # Compensate bed
-                            self.bed_client.release_bed(ctx_prom_bed, target_bed.bed_id, candidate_alloc_id)
-        finally:
-            self.lock_client.release(lease.lock_id, lease.owner_id)
+    def _complete_mutating_claim(self, session, allocation_id, endpoint, payload, key, response):
+        self._save_idempotency(session, key, endpoint, payload, 200, response.model_dump())
 
-        # Update database with release outcome & outbox events
-        with self.session_factory() as session:
-            alloc_rec = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
-            alloc_rec.status = "RELEASED"
-            alloc_rec.updated_at = datetime.now(timezone.utc)
-
-            now_iso = datetime.now(timezone.utc).isoformat()
-
-            # Pub/Sub BED_RELEASED
-            pubsub_event = {
-                "schema_version": "1.0.0",
-                "event_id": str(uuid.uuid4()),
-                "event_type": "BED_RELEASED",
-                "occurred_at": now_iso,
-                "request_id": request_id,
-                "allocation_id": allocation_id,
-                "admission_id": admission_id,
-                "pool_id": pool_id,
-                "bed_id": bed_id,
-                "ward": "ICU-A"
-            }
-            session.add(OutboxEventModel(
-                event_id=pubsub_event["event_id"],
-                destination="pubsub",
-                topic="bed-notifications",
-                message_key=pool_id,
-                payload=json.dumps(pubsub_event)
-            ))
-
-            # Kafka BED_RELEASED (delta = -1)
-            kafka_event = {
-                "schema_version": "1.0.0",
-                "event_id": str(uuid.uuid4()),
-                "event_type": "BED_RELEASED",
-                "event_time": now_iso,
-                "request_id": request_id,
-                "allocation_id": allocation_id,
-                "admission_id": admission_id,
-                "patient_id": f"pat-{admission_id}",
-                "pool_id": pool_id,
-                "bed_id": bed_id,
-                "lock_wait_ms": 0,
-                "lock_contended": False,
-                "allocation_wait_ms": 0,
-                "occupancy_delta": -1
-            }
-            session.add(OutboxEventModel(
-                event_id=kafka_event["event_id"],
-                destination="kafka",
-                topic="bed-events",
-                message_key=pool_id,
-                payload=json.dumps(kafka_event)
-            ))
-
-            resp_dto = ReleaseResponse(
-                allocation_id=allocation_id,
-                status="RELEASED",
-                promoted_allocation_id=promoted_allocation_id
-            )
-            self._save_idempotency(session, idempotency_key, f"POST /api/v1/allocations/{allocation_id}/release", {"reason": reason}, 200, resp_dto.model_dump())
-            session.commit()
-
-        return resp_dto
-
-    def cancel_allocation(self, allocation_id: str, reason: str, request_id: str, idempotency_key: Optional[str] = None) -> AllocationResponse:
-        with self.session_factory() as session:
-            cached = self._check_idempotency(session, idempotency_key, f"POST /api/v1/allocations/{allocation_id}/cancel", {"reason": reason})
-            if cached:
-                return AllocationResponse(**cached)
-
-            alloc = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
-            if not alloc:
-                raise AppException(
-                    code="NOT_FOUND",
-                    message=f"Allocation '{allocation_id}' does not exist",
-                    status_code=status.HTTP_404_NOT_FOUND
-                )
-
-            if alloc.status == "CANCELLED":
-                return AllocationResponse(
-                    allocation_id=alloc.allocation_id,
-                    admission_id=alloc.admission_id,
-                    pool_id=alloc.pool_id,
-                    status=alloc.status,
-                    created_at=alloc.created_at.isoformat()
-                )
-
-            if alloc.status != "WAITLISTED":
-                raise AppException(
-                    code="STATE_CONFLICT",
-                    message=f"Cannot cancel allocation in '{alloc.status}' status (cancellation applies strictly to WAITLISTED)",
-                    status_code=status.HTTP_409_CONFLICT
-                )
-
-            pool_id = alloc.pool_id
-
-        # Acquire lock to remove from waitlist
-        lease = self.lock_client.acquire(
-            pool_id=pool_id,
-            owner_id=self.owner_id,
-            acquire_id=f"acq-cancel-{allocation_id}",
-            lease_ms=10000,
-            wait_timeout_ms=5000
-        )
-        try:
-            ctx_cancel = MutationContext(
-                operation_id=f"{allocation_id}:cancel-waitlist",
-                request_id=request_id,
-                pool_id=pool_id,
-                lock_id=lease.lock_id,
-                owner_id=lease.owner_id,
-                fencing_token=lease.fencing_token
-            )
-            self.triage_client.remove_entry(ctx_cancel, allocation_id, f"cancelled: {reason}")
-        finally:
-            self.lock_client.release(lease.lock_id, lease.owner_id)
-
+    def _release_operation(self, allocation_id, step, lease, request_id, remote_call):
+        operation_id = f"{allocation_id}:{step.lower().replace('_', '-')}"
+        previous = self._read_operation(operation_id)
+        if previous and previous["status"] == "SUCCEEDED":
+            return previous.get("details_data", {})
         with self.session_factory() as session:
             record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
-            record.status = "CANCELLED"
-            record.waitlist_entry_id = None
-            record.updated_at = datetime.now(timezone.utc)
+            data = json.loads(record.workflow_data or "{}")
+        self._record_step(allocation_id, step, operation_id, step, "INTENDED", allocation_status="RELEASING")
+        try:
+            result = remote_call(operation_id, lease, data)
+            if result is False or (isinstance(result, tuple) and result and result[0] is False):
+                raise RuntimeError(f"{step} was not confirmed")
+        except Exception as error:
+            self._mark_recovering(allocation_id, step, operation_id, step, error)
+            return None
+        details = result if isinstance(result, dict) else {}
+        self._record_step(allocation_id, step, operation_id, step, "SUCCEEDED", details, "RELEASING")
+        return details
 
-            resp_dto = AllocationResponse(
-                allocation_id=record.allocation_id,
-                admission_id=record.admission_id,
-                pool_id=record.pool_id,
-                status=record.status,
-                bed_id=record.bed_id,
-                staff_assignment_id=record.staff_assignment_id,
-                waitlist_entry_id=record.waitlist_entry_id,
-                created_at=record.created_at.isoformat()
-            )
-            self._save_idempotency(session, idempotency_key, f"POST /api/v1/allocations/{allocation_id}/cancel", {"reason": reason}, 200, resp_dto.model_dump())
+    def _finalize_release(self, allocation_id, idempotency_key, payload, request_id):
+        endpoint = f"POST /api/v1/allocations/{allocation_id}/release"
+        with self.session_factory() as session:
+            record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).with_for_update().one()
+            data = json.loads(record.workflow_data or "{}")
+            now = datetime.now(timezone.utc)
+            response = ReleaseResponse(allocation_id=allocation_id, status="RELEASED")
+            record.status = "RELEASED"
+            record.pending_action = "PROMOTE"
+            data.update({"stage": "PROMOTE", "request_id": request_id})
+            record.workflow_data = json.dumps(data)
+            record.recovery_claim_until = now
+            record.updated_at = now
+            # Stable event IDs make recovery safe if the transaction is retried.
+            for destination, topic in (("pubsub", "bed-notifications"), ("kafka", "bed-events")):
+                event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"allocation:{allocation_id}:{destination}:BED_RELEASED"))
+                if session.query(OutboxEventModel).filter_by(event_id=event_id).first():
+                    continue
+                event = {
+                    "schema_version": "1.0.0", "event_id": event_id, "event_type": "BED_RELEASED",
+                    ("occurred_at" if destination == "pubsub" else "event_time"): now.isoformat(),
+                    "request_id": request_id, "allocation_id": allocation_id,
+                    "admission_id": record.admission_id, "pool_id": record.pool_id,
+                    "bed_id": record.bed_id, "occupancy_delta": -1,
+                }
+                session.add(OutboxEventModel(event_id=event_id, destination=destination, topic=topic,
+                    message_key=record.pool_id, payload=json.dumps(event)))
+            self._complete_mutating_claim(session, allocation_id, endpoint, payload, idempotency_key, response)
             session.commit()
+            return record.pool_id
 
-        return resp_dto
+    def _promotion_context(self, operation_id, request_id, lease):
+        return MutationContext(operation_id=operation_id, request_id=request_id, pool_id=lease.pool_id,
+            lock_id=lease.lock_id, owner_id=lease.owner_id, fencing_token=lease.fencing_token)
+
+    def _promote_next_locked(self, allocation_id, lease, request_id):
+        """Attempt one priority-ordered promotion while holding the already acquired pool lease."""
+        with self.session_factory() as session:
+            release_record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
+            data = json.loads(release_record.workflow_data or "{}")
+            attempt = int(data.get("promotion_attempt", 1))
+            candidate_id = data.get("promotion_target")
+        compensation_id = f"{candidate_id}:prom-compensate-bed:{attempt}" if candidate_id else None
+        compensation = self._read_operation(compensation_id) if compensation_id else None
+        if compensation and compensation["status"] in {"INTENDED", "UNCERTAIN"}:
+            bed_id = compensation["details"].get("bed_id")
+            released, _ = self.bed_client.release_bed(
+                self._promotion_context(compensation_id, request_id, lease), bed_id, candidate_id
+            )
+            if not released:
+                raise RuntimeError("Promotion compensation remains unconfirmed")
+            self._record_step(allocation_id, "PROMOTE", compensation_id, "PROMOTE_COMPENSATE_BED", "SUCCEEDED", compensation["details"], "RELEASED")
+            with self.session_factory() as session:
+                release_record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
+                data = json.loads(release_record.workflow_data or "{}")
+                data.update({"stage": "PROMOTE", "promotion_attempt": attempt + 1})
+                data.pop("promotion_target", None)
+                release_record.workflow_data = json.dumps(data)
+                release_record.pending_action = "PROMOTE"
+                release_record.status = "RELEASED"
+                release_record.recovery_claim_until = datetime.now(timezone.utc)
+                session.commit()
+            return None
+        bed_op = f"{candidate_id}:prom-bed:{attempt}" if candidate_id else None
+        staff_op = f"{candidate_id}:prom-staff:{attempt}" if candidate_id else None
+        remove_op = f"{candidate_id}:prom-remove:{attempt}" if candidate_id else None
+        existing_effect = any(self._read_operation(op_id) for op_id in (bed_op, staff_op, remove_op) if op_id)
+        peeked = self.triage_client.peek_next(lease.pool_id, request_id)
+        if candidate_id and existing_effect:
+            # Continue the already-started target even if queue removal may have
+            # committed before this process died.
+            pass
+        elif not peeked:
+            with self.session_factory() as session:
+                release_record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
+                release_record.pending_action = None
+                release_record.recovery_claim_owner = None
+                release_record.recovery_claim_until = None
+                release_record.workflow_data = json.dumps({**json.loads(release_record.workflow_data or "{}"), "stage": "DONE"})
+                session.commit()
+            return None
+        else:
+            candidate_id = peeked.allocation_id
+            with self.session_factory() as session:
+                release_record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
+                data = json.loads(release_record.workflow_data or "{}")
+                data.update({"stage": "PROMOTE", "promotion_target": candidate_id})
+                release_record.workflow_data = json.dumps(data)
+                release_record.pending_action = "PROMOTE"
+                session.commit()
+            attempt = int(data.get("promotion_attempt", 1))
+            bed_op = f"{candidate_id}:prom-bed:{attempt}"
+            staff_op = f"{candidate_id}:prom-staff:{attempt}"
+            remove_op = f"{candidate_id}:prom-remove:{attempt}"
+            existing_effect = False
+
+        if self._read_operation(remove_op) and self._read_operation(remove_op)["status"] == "SUCCEEDED":
+            staff_result = self._read_operation(staff_op)
+            details = staff_result["details"] if staff_result else {}
+            with self.session_factory() as session:
+                candidate = session.query(AllocationModel).filter_by(allocation_id=candidate_id).with_for_update().first()
+                if candidate:
+                    candidate.status = "ALLOCATED"
+                    candidate.bed_id = details.get("bed_id", candidate.bed_id)
+                    candidate.staff_assignment_id = details.get("staff_assignment_id", candidate.staff_assignment_id)
+                    candidate.waitlist_entry_id = None
+                release_record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
+                release_record.pending_action = None
+                release_record.recovery_claim_owner = None
+                release_record.recovery_claim_until = None
+                release_record.workflow_data = json.dumps({**json.loads(release_record.workflow_data or "{}"), "stage": "DONE"})
+                session.commit()
+            return candidate_id
+
+        if not existing_effect:
+            current = self.triage_client.peek_next(lease.pool_id, request_id)
+            if not current or current.allocation_id != candidate_id:
+                return None
+
+        prior_bed = self._read_operation(bed_op)
+        target_bed_id = (prior_bed["details"].get("bed_id") if prior_bed else None)
+        available_beds = self.bed_client.list_available_beds(lease.pool_id, request_id)
+        if not target_bed_id:
+            if not available_beds:
+                return None
+            target_bed_id = available_beds[0].bed_id
+        has_capacity, _ = self.staff_client.check_capacity(lease.pool_id, request_id)
+        if not has_capacity and not self._read_operation(staff_op):
+            return None
+        target_bed = next((bed for bed in available_beds if bed.bed_id == target_bed_id), None)
+        if target_bed is None:
+            target_bed = BedDto(bed_id=target_bed_id, pool_id=lease.pool_id, ward="ICU-A", status="OCCUPIED", current_allocation_id=candidate_id)
+        try:
+            self._record_step(allocation_id, "PROMOTE", bed_op, "PROMOTE_BED", "INTENDED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id}, "RELEASED")
+            bed_ok, _, _ = self.bed_client.allocate_bed(self._promotion_context(bed_op, request_id, lease), target_bed.bed_id, candidate_id)
+            if not bed_ok:
+                self._record_step(allocation_id, "PROMOTE", bed_op, "PROMOTE_BED", "FAILED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id}, "RELEASED")
+                with self.session_factory() as session:
+                    record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
+                    data = json.loads(record.workflow_data or "{}")
+                    data["promotion_attempt"] = attempt + 1
+                    data.pop("promotion_target", None)
+                    record.workflow_data = json.dumps(data)
+                    record.pending_action = "PROMOTE"
+                    record.status = "RELEASED"
+                    record.recovery_claim_until = datetime.now(timezone.utc)
+                    session.commit()
+                return None
+            self._record_step(allocation_id, "PROMOTE", bed_op, "PROMOTE_BED", "SUCCEEDED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id}, "RELEASED")
+            self._record_step(allocation_id, "PROMOTE", staff_op, "PROMOTE_STAFF", "INTENDED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id}, "RELEASED")
+            staff_ok, assignment_id, _, _ = self.staff_client.assign_staff(self._promotion_context(staff_op, request_id, lease), candidate_id, target_bed.bed_id)
+            if not staff_ok:
+                # Never remove the queue entry. Persist compensation intent before releasing our bed.
+                compensation_id = f"{candidate_id}:prom-compensate-bed:{attempt}"
+                self._record_step(allocation_id, "PROMOTE", compensation_id, "PROMOTE_COMPENSATE_BED", "INTENDED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id}, "RELEASED")
+                released, _ = self.bed_client.release_bed(self._promotion_context(compensation_id, request_id, lease), target_bed.bed_id, candidate_id)
+                if not released:
+                    raise RuntimeError("Promotion compensation was not confirmed")
+                self._record_step(allocation_id, "PROMOTE", compensation_id, "PROMOTE_COMPENSATE_BED", "SUCCEEDED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id}, "RELEASED")
+                with self.session_factory() as session:
+                    record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
+                    data = json.loads(record.workflow_data or "{}")
+                    data["promotion_attempt"] = attempt + 1
+                    data["stage"] = "PROMOTE"
+                    record.workflow_data = json.dumps(data)
+                    record.pending_action = "PROMOTE"
+                    record.status = "RELEASED"
+                    record.recovery_claim_until = datetime.now(timezone.utc)
+                    session.commit()
+                return None
+            self._record_step(allocation_id, "PROMOTE", staff_op, "PROMOTE_STAFF", "SUCCEEDED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id, "staff_assignment_id": assignment_id}, "RELEASED")
+            self._record_step(allocation_id, "PROMOTE", remove_op, "PROMOTE_REMOVE_QUEUE", "INTENDED", {"candidate_id": candidate_id}, "RELEASED")
+            removed = self.triage_client.remove_entry(self._promotion_context(remove_op, request_id, lease), candidate_id, "promoted")
+            if not removed:
+                raise RuntimeError("Promotion queue removal was not confirmed")
+            self._record_step(allocation_id, "PROMOTE", remove_op, "PROMOTE_REMOVE_QUEUE", "SUCCEEDED", {"candidate_id": candidate_id}, "RELEASED")
+            self._record_step(allocation_id, "PROMOTE", f"{candidate_id}:promotion-confirmed", "PROMOTION_CONFIRMED", "SUCCEEDED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id, "staff_assignment_id": assignment_id}, "RELEASED")
+            with self.session_factory() as session:
+                candidate = session.query(AllocationModel).filter_by(allocation_id=candidate_id).with_for_update().first()
+                if candidate:
+                    candidate.status = "ALLOCATED"
+                    candidate.bed_id = target_bed.bed_id
+                    candidate.staff_assignment_id = assignment_id
+                    candidate.waitlist_entry_id = None
+                    candidate.updated_at = datetime.now(timezone.utc)
+                released_record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
+                released_record.pending_action = None
+                released_record.recovery_claim_owner = None
+                released_record.recovery_claim_until = None
+                released_record.workflow_data = json.dumps({**json.loads(released_record.workflow_data or "{}"), "stage": "DONE", "promotion_target": candidate_id})
+                release_claim = session.query(IdempotencyModel).filter_by(
+                    method="POST", operation="RELEASE", target_id=allocation_id,
+                    allocation_id=allocation_id,
+                ).first()
+                if release_claim and release_claim.state == "COMPLETED":
+                    body = json.loads(release_claim.response_body or "{}")
+                    body["promoted_allocation_id"] = candidate_id
+                    release_claim.response_body = json.dumps(body)
+                    release_claim.updated_at = datetime.now(timezone.utc)
+                session.commit()
+            return candidate_id
+        except Exception as error:
+            self._mark_recovering(allocation_id, "PROMOTE", f"{candidate_id}:promotion", "PROMOTION", error)
+            # The released allocation stays RELEASED; its durable promotion action remains retryable.
+            with self.session_factory() as session:
+                record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
+                record.status = "RELEASED"
+                record.pending_action = "PROMOTE"
+                session.commit()
+            return None
+
+    def release_allocation(self, allocation_id: str, reason: str, request_id: str, idempotency_key: Optional[str] = None):
+        endpoint = f"POST /api/v1/allocations/{allocation_id}/release"
+        payload = {"reason": reason}
+        workflow = {"action": "RELEASE", "reason": reason, "request_id": request_id, "idempotency_key": idempotency_key, "stage": "RELEASE_BED"}
+        claimed = self._claim_mutating_action(allocation_id, endpoint, payload, "RELEASING", "RELEASE_BED", workflow)
+        if claimed is not None:
+            return claimed if isinstance(claimed, (AllocationResponse, ReleaseResponse)) else ReleaseResponse(**claimed)
+        return self._resume_release(allocation_id, request_id, idempotency_key, payload)
+
+    def _resume_release(self, allocation_id, request_id, idempotency_key, payload):
+        with self.session_factory() as session:
+            record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
+            data = json.loads(record.workflow_data or "{}")
+            pool_id, bed_id, assignment_id = record.pool_id, record.bed_id, record.staff_assignment_id
+        try:
+            lease = self.lock_client.acquire(pool_id, self.owner_id, f"acq-release-{uuid.uuid4().hex}", 10000, 5000)
+        except Exception as error:
+            return self._mark_recovering(allocation_id, "RELEASE_BED", f"{allocation_id}:release-bed", "RELEASE_BED", error)
+        released = False
+        try:
+            if bed_id:
+                result = self._release_operation(allocation_id, "RELEASE_BED", lease, request_id,
+                    lambda op, current, _: self.bed_client.release_bed(self._promotion_context(op, request_id, current), bed_id, allocation_id))
+                if result is None:
+                    return self._allocation_snapshot(allocation_id)
+            if assignment_id:
+                result = self._release_operation(allocation_id, "RELEASE_STAFF", lease, request_id,
+                    lambda op, current, _: self.staff_client.release_assignment(self._promotion_context(op, request_id, current), assignment_id, allocation_id))
+                if result is None:
+                    return self._allocation_snapshot(allocation_id)
+            pool_id = self._finalize_release(allocation_id, idempotency_key, payload, request_id)
+            released = True
+            # Release is durable before promotion; failure can only leave the queue and retry action intact.
+            try:
+                self._promote_next_locked(allocation_id, lease, request_id)
+            except Exception:
+                # The release transaction is already committed and its response cached.
+                # Keep promotion claimable without changing the confirmed release.
+                with self.session_factory() as session:
+                    record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
+                    record.status = "RELEASED"
+                    record.pending_action = "PROMOTE"
+                    record.recovery_claim_until = datetime.now(timezone.utc)
+                    session.commit()
+            with self.session_factory() as session:
+                record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
+                data = json.loads(record.workflow_data or "{}")
+                candidate = data.get("promotion_target") if record.pending_action is None else None
+                pending_action = record.pending_action
+            return ReleaseResponse(allocation_id=allocation_id, status="RELEASED", promoted_allocation_id=candidate,
+                pending_action=None)
+        except Exception as error:
+            return self._mark_recovering(allocation_id, "RELEASE_BED" if not released else "PROMOTE", f"{allocation_id}:release-recovery", "RELEASE", error)
+        finally:
+            self.lock_client.release(lease.lock_id, lease.owner_id)
+
+    def cancel_allocation(self, allocation_id: str, reason: str, request_id: str, idempotency_key: Optional[str] = None):
+        endpoint = f"POST /api/v1/allocations/{allocation_id}/cancel"
+        payload = {"reason": reason}
+        workflow = {"action": "CANCEL", "reason": reason, "request_id": request_id, "idempotency_key": idempotency_key, "stage": "CANCEL_QUEUE"}
+        claimed = self._claim_mutating_action(allocation_id, endpoint, payload, "CANCELLING", "CANCEL_QUEUE", workflow)
+        if claimed is not None:
+            return claimed if isinstance(claimed, AllocationResponse) else AllocationResponse(**claimed)
+        return self._resume_cancel(allocation_id, request_id, idempotency_key, payload)
+
+    def _resume_cancel(self, allocation_id, request_id, idempotency_key, payload):
+        endpoint = f"POST /api/v1/allocations/{allocation_id}/cancel"
+        try:
+            with self.session_factory() as session:
+                record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
+                data = json.loads(record.workflow_data or "{}")
+                pool_id, reason = record.pool_id, data.get("reason", "cancelled")
+            lease = self.lock_client.acquire(pool_id, self.owner_id, f"acq-cancel-{uuid.uuid4().hex}", 10000, 5000)
+        except Exception as error:
+            return self._mark_recovering(allocation_id, "CANCEL_QUEUE", f"{allocation_id}:cancel-waitlist", "CANCEL_QUEUE", error)
+        try:
+            op_id = f"{allocation_id}:cancel-waitlist"
+            self._record_step(allocation_id, "CANCEL_QUEUE", op_id, "CANCEL_QUEUE", "INTENDED", allocation_status="CANCELLING")
+            try:
+                removed = self.triage_client.remove_entry(self._promotion_context(op_id, request_id, lease), allocation_id, f"cancelled: {reason}")
+                if not removed:
+                    raise RuntimeError("Waitlist removal was not confirmed")
+            except Exception as error:
+                return self._mark_recovering(allocation_id, "CANCEL_QUEUE", op_id, "CANCEL_QUEUE", error)
+            self._record_step(allocation_id, "CANCEL_CONFIRMED", op_id, "CANCEL_QUEUE", "SUCCEEDED", allocation_status="CANCELLING")
+            with self.session_factory() as session:
+                record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).with_for_update().one()
+                record.status = "CANCELLED"
+                record.pending_action = None
+                record.waitlist_entry_id = None
+                record.recovery_claim_owner = None
+                record.recovery_claim_until = None
+                record.updated_at = datetime.now(timezone.utc)
+                response = self._allocation_response(record)
+                self._complete_mutating_claim(session, allocation_id, endpoint, payload, idempotency_key, response)
+                session.commit()
+                return response
+        finally:
+            self.lock_client.release(lease.lock_id, lease.owner_id)
 
     def get_allocation(self, allocation_id: str) -> AllocationResponse:
         with self.session_factory() as session:

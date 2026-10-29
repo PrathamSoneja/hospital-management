@@ -207,6 +207,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Allocation'
+        '202':
+          description: Cancellation durably accepted and awaiting confirmation
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecoveryAccepted'
         '400':
           $ref: '#/components/responses/ErrorResponse400'
         '404':
@@ -286,6 +297,9 @@ components:
           type: string
           enum: [RELEASED]
         promoted_allocation_id:
+          type: string
+          nullable: true
+        pending_action:
           type: string
           nullable: true
 
