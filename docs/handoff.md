@@ -6,7 +6,7 @@ Updated: 2026-10-29
 
 Member B owns Bed Allocation, Triage, HPA, k6, Prometheus/Grafana, and structured logging. No README, prior handoff, or workspace agent instructions were present during this review.
 
-The worktree contains existing user/agent work that must be preserved: `docs/decisions.md` is modified; the former `services/bed-allocation/` files are deleted; `services/bed_allocation/`, `services/triage/Dockerfile`, `compose.yaml`, `k8s/`, `monitoring/`, `tests/contracts/`, and `tests/test_allocation_service.py` are untracked. Do not restore or discard these changes.
+The service baseline and approved uniqueness work were pushed to `origin/master` in commits `da915bd` and `8a2220b`. The worktree was clean before this handoff update.
 
 ## Implemented and Checked
 
@@ -21,8 +21,8 @@ The worktree contains existing user/agent work that must be preserved: `docs/dec
 ## Incomplete or Conflicting
 
 - Allocation active predicate is now `status NOT IN ('RELEASED', 'CANCELLED', 'FAILED')`, matching the partial unique index `uq_allocations_active_admission`. The service maps that index race to 409 `ACTIVE_ALLOCATION_EXISTS`; same-key completed replay remains checked first.
-- An Alembic index migration reports existing duplicate active allocation IDs and does not delete rows. Alembic is declared in `requirements.txt` and installed in `.venv` for this workspace. Migration execution against a database and the real PostgreSQL race remain unverified.
-- Tests now cover partial-index behavior on SQLite, rejection while `RECOVERING`, existing same-key replay, and an opt-in two-request PostgreSQL concurrency test using separate pooled connections and a temporary schema. The PostgreSQL test skips unless `TEST_POSTGRES_URL` points to local PostgreSQL.
+- An Alembic index migration reports existing duplicate active allocation IDs and does not delete rows. Alembic is declared in `requirements.txt`; the migration was applied to the local Compose PostgreSQL database and its index definition verified.
+- Tests cover partial-index behavior on SQLite, rejection while `RECOVERING`, same-key replay, and a two-request PostgreSQL concurrency test using separate pooled connections and a temporary schema. The PostgreSQL test skips unless `TEST_POSTGRES_URL` points to local PostgreSQL.
 - Triage production construction still uses `MockFencingValidator`; the real lock validator is not selected. Unknown/non-Firestore storage modes fall through to memory, and the app's default backend is memory.
 - `RemoteLockValidator` and RPC deadlines exist, but Triage does not wire the remote validator. Bed/staff mutation RPC exceptions are returned as ordinary failure tuples, which can turn an unknown remote outcome into a guessed failure; no stable-operation reconciliation path covers these cases.
 - The non-fake allocation path still selects `FakeEventPublisher`; no production Pub/Sub/Kafka publisher or running outbox worker is wired.
@@ -38,16 +38,17 @@ The worktree contains existing user/agent work that must be preserved: `docs/dec
 
 ## Commands
 
-- Full local suite: `.venv\Scripts\python.exe -m pytest -q` -> **25 passed, 1 skipped** (2026-10-29). The skip is the opt-in PostgreSQL concurrency test.
+- Full local suite with local PostgreSQL enabled: `.venv\Scripts\python.exe -m pytest -q` -> **26 passed** (2026-10-29).
 - Focused uniqueness/recovery/replay checks: `.venv\Scripts\python.exe -m pytest tests\test_allocation_service.py -k "recovery or replay or partial_unique" -q` -> 2 passed, 1 skipped, 11 deselected.
 - Allocation tests: `.venv\Scripts\python.exe -m pytest tests\test_allocation_service.py -q` -> 13 passed, 1 skipped.
 - Triage and event schema tests: `.venv\Scripts\python.exe -m pytest tests\contracts\test_event_schemas.py tests\test_triage_service.py -q` -> 12 passed.
 - Alembic revision discovery and offline SQL generation passed: `.venv\Scripts\python.exe -m alembic heads` and `.venv\Scripts\python.exe -m alembic upgrade head --sql`.
 - Changed Python files passed Pylance diagnostics and `py_compile`; allocation OpenAPI YAML parsed successfully.
-- PostgreSQL availability: no local PostgreSQL service or binaries, Docker daemon unavailable, and `localhost:5432` connection check failed. The PostgreSQL concurrency test was not run.
+- PostgreSQL test: `.venv\Scripts\python.exe -m pytest tests\test_allocation_service.py::test_postgres_concurrent_requests_use_partial_unique_index -q` -> **1 passed** against the local Compose database.
+- PostgreSQL migration applied locally with `.venv\Scripts\python.exe -m alembic upgrade head`; verified `uq_allocations_active_admission` on the local database. No cloud database was accessed.
 - System interpreter suite: `pytest -q` (collection errors due to missing dependencies).
-- No cloud resources were written, and no cluster deployment or billable action was run. At the user's request, commit `da915bd` was pushed to `origin/master`.
+- No cloud resources were written, and no cluster deployment or billable action was run. Git commits `da915bd` and `8a2220b` were pushed to `origin/master` at the user's request.
 
 ## Exact Next Task
 
-Start an isolated local PostgreSQL database, set both `DATABASE_URL` and `TEST_POSTGRES_URL` to that local database, run `.venv\Scripts\python.exe -m alembic upgrade head`, then run `.venv\Scripts\python.exe -m pytest tests\test_allocation_service.py::test_postgres_concurrent_requests_use_partial_unique_index -q`. Inspect and resolve any duplicate report explicitly; do not run the migration against cloud resources or claim PostgreSQL concurrency correctness until the real test passes. Next, implement the approved recovery lifecycle.
+Implement the approved Triage urgency update behavior: acquire the existing per-pool lock once, atomically update the triage record and active queue entry while preserving `entry_id` and `queued_at`, and do not recreate an entry after promotion commits. Add Firestore transaction and lock-contention tests; then proceed to the approved allocation recovery lifecycle. No additional design changes are approved.
