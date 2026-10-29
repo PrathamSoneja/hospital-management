@@ -150,7 +150,9 @@ class GrpcBedRegistryClient(BedRegistryClient):
             )
             return True, bed, ""
         except grpc.RpcError as e:
-            return False, None, f"Bed allocation RPC error: {e.details()}"
+            code = "DEADLINE_EXCEEDED" if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED else "SERVICE_UNAVAILABLE"
+            http_status = status.HTTP_504_GATEWAY_TIMEOUT if code == "DEADLINE_EXCEEDED" else status.HTTP_503_SERVICE_UNAVAILABLE
+            raise AppException(code, "Bed allocation outcome is unknown; reconciliation is required", http_status, retryable=True)
 
     def release_bed(self, context, bed_id: str, allocation_id: str) -> Tuple[bool, str]:
         req = bed_pb2.ReleaseBedRequest(context=context, bed_id=bed_id, allocation_id=allocation_id)
@@ -158,7 +160,9 @@ class GrpcBedRegistryClient(BedRegistryClient):
             resp = self.stub.ReleaseBed(req, timeout=self.default_timeout_s)
             return resp.success, resp.error_message
         except grpc.RpcError as e:
-            return False, f"Bed release RPC error: {e.details()}"
+            code = "DEADLINE_EXCEEDED" if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED else "SERVICE_UNAVAILABLE"
+            http_status = status.HTTP_504_GATEWAY_TIMEOUT if code == "DEADLINE_EXCEEDED" else status.HTTP_503_SERVICE_UNAVAILABLE
+            raise AppException(code, "Bed release outcome is unknown; reconciliation is required", http_status, retryable=True)
 
 class GrpcStaffSchedulerClient(StaffSchedulerClient):
     def __init__(self, target: str, default_timeout_s: float = 3.0):
@@ -180,7 +184,9 @@ class GrpcStaffSchedulerClient(StaffSchedulerClient):
             resp = self.stub.AssignStaff(req, timeout=self.default_timeout_s)
             return resp.success, resp.staff_assignment_id, resp.staff_id, resp.error_message
         except grpc.RpcError as e:
-            return False, None, None, f"Staff assignment RPC error: {e.details()}"
+            code = "DEADLINE_EXCEEDED" if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED else "SERVICE_UNAVAILABLE"
+            http_status = status.HTTP_504_GATEWAY_TIMEOUT if code == "DEADLINE_EXCEEDED" else status.HTTP_503_SERVICE_UNAVAILABLE
+            raise AppException(code, "Staff assignment outcome is unknown; reconciliation is required", http_status, retryable=True)
 
     def release_assignment(self, context, staff_assignment_id: str, allocation_id: str) -> Tuple[bool, str]:
         req = staff_pb2.ReleaseAssignmentRequest(context=context, staff_assignment_id=staff_assignment_id, allocation_id=allocation_id)
@@ -188,7 +194,9 @@ class GrpcStaffSchedulerClient(StaffSchedulerClient):
             resp = self.stub.ReleaseAssignment(req, timeout=self.default_timeout_s)
             return resp.success, resp.error_message
         except grpc.RpcError as e:
-            return False, f"Staff release RPC error: {e.details()}"
+            code = "DEADLINE_EXCEEDED" if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED else "SERVICE_UNAVAILABLE"
+            http_status = status.HTTP_504_GATEWAY_TIMEOUT if code == "DEADLINE_EXCEEDED" else status.HTTP_503_SERVICE_UNAVAILABLE
+            raise AppException(code, "Staff release outcome is unknown; reconciliation is required", http_status, retryable=True)
 
 class HttpPatientRegistryClient(PatientRegistryClient):
     def __init__(self, base_url: str, default_timeout_s: float = 3.0):
