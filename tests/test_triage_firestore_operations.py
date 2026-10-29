@@ -6,7 +6,7 @@ import uuid
 import pytest
 
 from google.cloud import firestore
-from services.triage.models import WaitlistEntry
+from services.triage.models import TriageRecord, WaitlistEntry
 from services.triage.repository.firestore import FirestoreTriageRepository
 from shared.generated.common_pb2 import MutationContext
 from shared.observability.errors import AppException
@@ -139,6 +139,10 @@ def test_completed_remove_rejects_recreated_target_with_different_entry_id(repos
 
 
 def test_enqueue_operation_is_durable_and_conflicts_with_remove_action(repository):
+    repository.save_triage(TriageRecord(
+        admission_id="enqueue-admission", triage_level=2, pool_id="pool-a",
+        updated_at="2026-10-29T00:00:00+00:00",
+    ))
     entry = WaitlistEntry(
         entry_id="enqueue-entry", allocation_id="enqueue-allocation",
         admission_id="enqueue-admission", pool_id="pool-a", triage_level=2,

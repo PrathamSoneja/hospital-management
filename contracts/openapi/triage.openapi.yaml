@@ -18,6 +18,14 @@ paths:
           required: false
           schema:
             type: string
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Opaque key for durable replay of this PUT request.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 200
       requestBody:
         required: true
         content:
@@ -35,6 +43,10 @@ paths:
           $ref: '#/components/responses/ErrorResponse400'
         '409':
           $ref: '#/components/responses/ErrorResponse409'
+        '503':
+          $ref: '#/components/responses/ErrorResponse503'
+        '504':
+          $ref: '#/components/responses/ErrorResponse504'
     get:
       summary: Get triage assessment for an admission
       parameters:
@@ -57,6 +69,10 @@ paths:
                 $ref: '#/components/schemas/TriageRecord'
         '404':
           $ref: '#/components/responses/ErrorResponse404'
+        '503':
+          $ref: '#/components/responses/ErrorResponse503'
+        '504':
+          $ref: '#/components/responses/ErrorResponse504'
 
   /api/v1/waitlists/{pool_id}:
     get:
@@ -90,11 +106,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WaitlistPage'
+        '400':
+          $ref: '#/components/responses/ErrorResponse400'
+        '503':
+          $ref: '#/components/responses/ErrorResponse503'
+        '504':
+          $ref: '#/components/responses/ErrorResponse504'
 
 components:
   schemas:
     SetTriageRequest:
       type: object
+      description: pool_id is immutable after the first successful PUT for an admission.
       required:
         - triage_level
         - pool_id
@@ -107,6 +130,7 @@ components:
         pool_id:
           type: string
           example: WARDA-ICU
+          description: Immutable after triage creation; a different value returns 409 POOL_CHANGE_NOT_SUPPORTED.
 
     TriageRecord:
       type: object
@@ -204,7 +228,19 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorEnvelope'
     ErrorResponse409:
-      description: State conflict or precondition failure
+      description: Idempotency mismatch, immutable pool change, or other conflict.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ErrorResponse503:
+      description: A required local dependency is unavailable; retryable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ErrorResponse504:
+      description: A required dependency exceeded its bounded deadline; retryable.
       content:
         application/json:
           schema:

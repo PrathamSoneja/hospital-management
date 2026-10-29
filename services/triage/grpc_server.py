@@ -3,12 +3,23 @@ gRPC server implementation for TriageService.
 Maps protobuf requests to TriageDomainService methods with proper error propagation.
 """
 import grpc
+import logging
 from concurrent import futures
 from shared.generated import triage_pb2, triage_pb2_grpc
 from services.triage.service import TriageDomainService
 from shared.observability.errors import AppException
 from shared.observability.metrics import GRPC_REQUESTS_TOTAL, GRPC_REQUEST_DURATION_SECONDS
 import time
+
+logger = logging.getLogger("triage-service")
+
+def _request_id(context, message_request_id: str = "") -> str:
+    try:
+        invocation_metadata = context.invocation_metadata()
+    except (AttributeError, RuntimeError):
+        invocation_metadata = ()
+    metadata = dict((item.key.lower(), item.value) for item in invocation_metadata)
+    return metadata.get("x-request-id") or message_request_id or "unknown"
 
 class TriageGrpcServicer(triage_pb2_grpc.TriageServiceServicer):
     def __init__(self, service: TriageDomainService):
@@ -17,6 +28,8 @@ class TriageGrpcServicer(triage_pb2_grpc.TriageServiceServicer):
     def GetTriage(self, request, context):
         start = time.perf_counter()
         code = "OK"
+        request_id = _request_id(context, request.request_id)
+        logger.info("triage_grpc_get", extra={"event": "triage_grpc_get", "request_id": request_id})
         try:
             record = self.service.repo.get_triage(request.admission_id)
             if not record:
@@ -42,6 +55,8 @@ class TriageGrpcServicer(triage_pb2_grpc.TriageServiceServicer):
     def Enqueue(self, request, context):
         start = time.perf_counter()
         code = "OK"
+        request_id = _request_id(context, request.context.request_id)
+        logger.info("triage_grpc_enqueue", extra={"event": "triage_grpc_enqueue", "request_id": request_id, "pool_id": request.context.pool_id})
         try:
             entry, already_existed = self.service.enqueue(
                 context=request.context,
@@ -60,8 +75,13 @@ class TriageGrpcServicer(triage_pb2_grpc.TriageServiceServicer):
                 )
             )
         except AppException as e:
-            code = "FAILED_PRECONDITION" if e.status_code == 409 else "INVALID_ARGUMENT"
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION if e.status_code == 409 else grpc.StatusCode.INVALID_ARGUMENT)
+            grpc_code = {
+                409: grpc.StatusCode.FAILED_PRECONDITION,
+                503: grpc.StatusCode.UNAVAILABLE,
+                504: grpc.StatusCode.DEADLINE_EXCEEDED,
+            }.get(e.status_code, grpc.StatusCode.INVALID_ARGUMENT)
+            code = grpc_code.name
+            context.set_code(grpc_code)
             context.set_details(e.message)
             return triage_pb2.EnqueueWaitlistResponse()
         except Exception as e:
@@ -76,6 +96,8 @@ class TriageGrpcServicer(triage_pb2_grpc.TriageServiceServicer):
     def PeekNext(self, request, context):
         start = time.perf_counter()
         code = "OK"
+        request_id = _request_id(context, request.request_id)
+        logger.info("triage_grpc_peek_next", extra={"event": "triage_grpc_peek_next", "request_id": request_id, "pool_id": request.pool_id})
         try:
             entry = self.service.peek_next(request.pool_id)
             if not entry:
@@ -103,6 +125,8 @@ class TriageGrpcServicer(triage_pb2_grpc.TriageServiceServicer):
     def RemoveEntry(self, request, context):
         start = time.perf_counter()
         code = "OK"
+        request_id = _request_id(context, request.context.request_id)
+        logger.info("triage_grpc_remove_entry", extra={"event": "triage_grpc_remove_entry", "request_id": request_id, "pool_id": request.context.pool_id})
         try:
             success = self.service.remove_entry(
                 context=request.context,

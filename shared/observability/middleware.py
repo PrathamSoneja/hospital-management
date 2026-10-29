@@ -28,7 +28,7 @@ class ObservabilityASGIMiddleware:
             if name.lower() == b"x-request-id":
                 request_id = value.decode("latin1")
                 break
-        if not request_id:
+        if not request_id or len(request_id) > 128 or not all(0x21 <= ord(char) <= 0x7e for char in request_id):
             request_id = f"req-{uuid.uuid4().hex[:12]}"
 
         if "state" not in scope:

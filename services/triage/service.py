@@ -4,15 +4,20 @@ Decoupled from REST and gRPC transports.
 """
 import time
 import uuid
+import logging
+import os
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 from services.triage.models import TriageRecord, WaitlistEntry
 from services.triage.repository.base import TriageRepository
+from services.triage.idempotency import build_put_claim
 from services.triage.validation import FencingValidator
 from shared.generated.common_pb2 import MutationContext
 from shared.observability.errors import AppException
 from shared.observability.metrics import WAITLIST_ENTRIES, STALE_FENCING_REJECTIONS_TOTAL
 from starlette import status
+
+logger = logging.getLogger("triage-service")
 
 _last_ts_ns = 0
 
@@ -26,9 +31,63 @@ def get_monotonic_rfc3339() -> str:
     return dt.isoformat()
 
 class TriageDomainService:
-    def __init__(self, repo: TriageRepository, validator: FencingValidator):
+    def __init__(self, repo: TriageRepository, validator: FencingValidator,
+                 lock_client=None, owner_id: str = "triage-service"):
         self.repo = repo
         self.validator = validator
+        self.lock_client = lock_client
+        self.owner_id = owner_id
+
+    def put_triage(self, admission_id: str, triage_level: int, pool_id: str,
+                   idempotency_key: str, request_id: str) -> TriageRecord:
+        if triage_level < 1 or triage_level > 5:
+            raise AppException("INVALID_ARGUMENT", f"Triage level must be between 1 and 5, got {triage_level}", status.HTTP_400_BAD_REQUEST)
+        claim = build_put_claim(admission_id, idempotency_key, triage_level, pool_id)
+        replay = self.repo.lookup_triage_idempotency(claim)
+        if replay is not None:
+            return replay
+        if self.lock_client is None:
+            raise AppException("SERVICE_UNAVAILABLE", "Lock Coordinator is not configured", status.HTTP_503_SERVICE_UNAVAILABLE, retryable=True)
+
+        lease_ms = int(os.environ.get("TRIAGE_LOCK_LEASE_MS", "10000"))
+        wait_timeout_ms = int(os.environ.get("TRIAGE_LOCK_WAIT_TIMEOUT_MS", "5000"))
+        lease = self.lock_client.acquire(
+            pool_id, self.owner_id, f"triage-put:{claim['claim_id']}",
+            lease_ms, wait_timeout_ms, request_id=request_id,
+        )
+        try:
+            context = MutationContext(
+                operation_id=f"triage-put:{claim['claim_id']}",
+                request_id=request_id,
+                pool_id=pool_id,
+                lock_id=lease.lock_id,
+                owner_id=lease.owner_id,
+                fencing_token=lease.fencing_token,
+            )
+            if not self.validator.validate(context):
+                STALE_FENCING_REJECTIONS_TOTAL.labels(service="triage", pool_id=pool_id).inc()
+                raise AppException("FAILED_PRECONDITION", "Lock ownership or fencing token is no longer valid", status.HTTP_409_CONFLICT)
+            record = TriageRecord(
+                admission_id=admission_id, triage_level=triage_level,
+                pool_id=pool_id, updated_at=get_monotonic_rfc3339(),
+            )
+            result = self.repo.set_triage_idempotent(context, record, claim)
+            return result.record
+        finally:
+            try:
+                released = self.lock_client.release(lease.lock_id, lease.owner_id, request_id=request_id)
+                if not released:
+                    logger.warning("coordinator_lease_release_unconfirmed", extra={
+                        "event": "coordinator_lease_release_unconfirmed",
+                        "request_id": request_id, "pool_id": pool_id,
+                    })
+            except Exception:
+                # The lease has a bounded expiry. Do not mask an already committed
+                # Triage result with a cleanup RPC failure.
+                logger.warning("coordinator_lease_release_failed", extra={
+                    "event": "coordinator_lease_release_failed",
+                    "request_id": request_id, "pool_id": pool_id,
+                })
 
     def set_triage(self, admission_id: str, triage_level: int, pool_id: str) -> TriageRecord:
         if triage_level < 1 or triage_level > 5:
@@ -38,6 +97,14 @@ class TriageDomainService:
                 status_code=status.HTTP_400_BAD_REQUEST
             )
             
+        prior_triage = self.repo.get_triage(admission_id)
+        if prior_triage and prior_triage.pool_id != pool_id:
+            raise AppException(
+                code="POOL_CHANGE_NOT_SUPPORTED",
+                message="pool_id is immutable after triage creation",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
         existing_waitlist = self.repo.get_active_waitlist_by_admission(admission_id)
         if existing_waitlist:
             if existing_waitlist.pool_id != pool_id:

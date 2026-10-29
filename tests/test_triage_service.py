@@ -12,7 +12,6 @@ from services.triage.validation import MockFencingValidator
 from shared.generated.common_pb2 import MutationContext
 from shared.generated import triage_pb2
 from services.triage.grpc_server import TriageGrpcServicer
-from services.triage.rest import set_triage_endpoint, get_triage_endpoint, get_waitlist_endpoint
 from shared.observability.errors import AppException
 
 @pytest.fixture
@@ -30,7 +29,7 @@ def domain_service(repo, validator):
 def test_triage_range_validation(domain_service):
     # Valid urgency 1-5
     req1 = SetTriageRequest(triage_level=1, pool_id="WARDA-ICU")
-    res1 = set_triage_endpoint("adm-1", req1, domain_service)
+    res1 = domain_service.set_triage("adm-1", req1.triage_level, req1.pool_id)
     assert res1.triage_level == 1
     assert res1.admission_id == "adm-1"
 
@@ -44,7 +43,7 @@ def test_triage_range_validation(domain_service):
 
 def test_get_triage_not_found(domain_service):
     with pytest.raises(AppException) as exc:
-        get_triage_endpoint("non-existent-adm", domain_service)
+        domain_service.get_triage("non-existent-adm")
     assert exc.value.code == "NOT_FOUND"
     assert exc.value.status_code == 404
 
@@ -77,8 +76,8 @@ def test_waitlist_priority_ordering_and_fifo(domain_service):
     assert peeked.triage_level == 1
 
     # Verify list order: Level 1 (adm-2) -> Level 2 (adm-4) -> Level 3 FIFO (adm-1, then adm-3)
-    page = get_waitlist_endpoint("WARDA-ICU", 50, None, domain_service)
-    admission_order = [e.admission_id for e in page.items]
+    entries, _ = domain_service.list_waitlist("WARDA-ICU", 50, None)
+    admission_order = [e.admission_id for e in entries]
     assert admission_order == ["adm-2", "adm-4", "adm-1", "adm-3"]
 
 def test_duplicate_enqueue_returns_existing(domain_service):
@@ -102,10 +101,10 @@ def test_prohibit_pool_change_while_waitlisted(domain_service):
     # Attempting to change pool while active in waitlist must raise 409 STATE_CONFLICT
     req = SetTriageRequest(triage_level=2, pool_id="WARDB-CCU")
     with pytest.raises(AppException) as exc_info:
-        set_triage_endpoint("adm-pool", req, domain_service)
-    assert exc_info.value.code == "STATE_CONFLICT"
+        domain_service.set_triage("adm-pool", req.triage_level, req.pool_id)
+    assert exc_info.value.code == "POOL_CHANGE_NOT_SUPPORTED"
     assert exc_info.value.status_code == 409
-    assert "Cannot change pool" in exc_info.value.message
+    assert "immutable" in exc_info.value.message
 
 def test_urgency_change_while_waitlisted(domain_service):
     domain_service.set_triage("adm-urgent", 4, "WARDA-ICU")
@@ -115,7 +114,7 @@ def test_urgency_change_while_waitlisted(domain_service):
 
     # Patient deteriorates: urgency elevated to Level 1
     req = SetTriageRequest(triage_level=1, pool_id="WARDA-ICU")
-    set_triage_endpoint("adm-urgent", req, domain_service)
+    domain_service.set_triage("adm-urgent", req.triage_level, req.pool_id)
 
     # Waitlist record should reflect new urgency 1 while preserving original queued_at
     peeked = domain_service.peek_next("WARDA-ICU")

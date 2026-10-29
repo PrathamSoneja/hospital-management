@@ -17,6 +17,11 @@ class QueueEnqueueResult:
     already_existed: bool
     replayed: bool
 
+@dataclass(frozen=True)
+class TriageUpdateResult:
+    record: TriageRecord
+    replayed: bool
+
 class TriageRepository(ABC):
     @abstractmethod
     def get_triage(self, admission_id: str) -> Optional[TriageRecord]:
@@ -24,6 +29,16 @@ class TriageRepository(ABC):
 
     @abstractmethod
     def save_triage(self, triage: TriageRecord) -> TriageRecord:
+        pass
+
+    @abstractmethod
+    def lookup_triage_idempotency(self, claim: dict) -> Optional[TriageRecord]:
+        """Return a completed matching PUT response, or None if no claim exists."""
+        pass
+
+    @abstractmethod
+    def set_triage_idempotent(self, context, record: TriageRecord, claim: dict) -> TriageUpdateResult:
+        """Atomically persist triage, any active queue update, fence, and result."""
         pass
 
     @abstractmethod

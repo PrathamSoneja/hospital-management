@@ -48,8 +48,11 @@ services:
       TRIAGE_GRPC_PORT: 50051
       START_GRPC: "true"
       TRIAGE_STORAGE_BACKEND: firestore
+      TRIAGE_FENCING_MODE: coordinator
+      ENVIRONMENT: ${ENVIRONMENT:-local}
       FIRESTORE_PROJECT_ID: hospital-bed-mgmt-dev
       FIRESTORE_EMULATOR_HOST: firestore-emulator:8080
+      LOCK_COORDINATOR_ADDR: ${LOCK_COORDINATOR_ADDR:-}
     ports:
       - "8001:8000"
       - "50052:50051"
