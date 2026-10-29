@@ -17,6 +17,7 @@ class AllocationResponse(BaseModel):
     bed_id: Optional[str] = None
     staff_assignment_id: Optional[str] = None
     waitlist_entry_id: Optional[str] = None
+    pending_action: Optional[str] = None
     created_at: str
 
 class ReleaseRequest(BaseModel):
@@ -26,6 +27,7 @@ class ReleaseResponse(BaseModel):
     allocation_id: str
     status: str = "RELEASED"
     promoted_allocation_id: Optional[str] = None
+    pending_action: Optional[str] = None
 
 class CancelRequest(BaseModel):
     reason: str = Field(..., min_length=1)

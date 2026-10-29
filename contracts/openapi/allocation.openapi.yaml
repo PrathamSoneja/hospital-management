@@ -270,7 +270,7 @@ components:
           properties:
             status:
               type: string
-              enum: [RECOVERING]
+              enum: [PROCESSING, RELEASING, CANCELLING, RECOVERING]
             pending_action:
               type: string
 

@@ -3,8 +3,10 @@ Bed Allocation Service Application Entrypoint.
 Initializes PostgreSQL database, dependency clients, outbox worker, and FastAPI REST server.
 """
 import os
+import threading
 import uvicorn
 from fastapi import FastAPI
+from contextlib import asynccontextmanager
 from sqlalchemy.orm import sessionmaker
 from services.bed_allocation.clients.fakes import (
     DirectTriageClient, FakeBedRegistryClient, FakeLockCoordinatorClient,
@@ -80,9 +82,33 @@ def build_app(database_url: str = None, use_fakes: bool = True) -> FastAPI:
     )
     set_service(domain_service)
 
+    @asynccontextmanager
+    async def lifespan(app):
+        enabled = os.environ.get("ENABLE_RECOVERY_WORKER", "false").lower() == "true"
+        stop_event = threading.Event()
+
+        def recovery_loop():
+            while not stop_event.wait(float(os.environ.get("RECOVERY_POLL_SECONDS", "2"))):
+                try:
+                    domain_service.recover_pending()
+                except Exception as error:
+                    logger.error(f"Recovery pass failed ({type(error).__name__})")
+
+        worker = None
+        if enabled:
+            worker = threading.Thread(target=recovery_loop, name="allocation-recovery", daemon=True)
+            worker.start()
+        try:
+            yield
+        finally:
+            stop_event.set()
+            if worker is not None:
+                worker.join(timeout=5)
+
     app = FastAPI(
         title="Hospital Bed Allocation Service",
-        version="1.0.0"
+        version="1.0.0",
+        lifespan=lifespan,
     )
 
     register_error_handlers(app, "bed-allocation-service")

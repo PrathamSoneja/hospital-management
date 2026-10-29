@@ -54,6 +54,8 @@ spec:
               value: "http://patient-registry-service:8000/api/v1"
             - name: USE_FAKES
               value: "false"
+            - name: ENABLE_RECOVERY_WORKER
+              value: "true"
           resources:
             requests:
               cpu: 250m

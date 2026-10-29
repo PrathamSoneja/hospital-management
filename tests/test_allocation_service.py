@@ -6,6 +6,7 @@ active-request prevention, release, promotion, and outbox event persistence.
 import os
 import threading
 import uuid
+from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit
 
@@ -13,11 +14,13 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+from fastapi import Response
 from services.bed_allocation.clients.fakes import (
     DirectTriageClient, FakeBedRegistryClient, FakeLockCoordinatorClient,
     FakePatientRegistryClient, FakeStaffSchedulerClient
 )
-from services.bed_allocation.db import AllocationModel, Base, init_db, OutboxEventModel
+from services.bed_allocation.db import AllocationModel, Base, IdempotencyModel, init_db, OperationRecoveryModel, OutboxEventModel
 from services.bed_allocation.models import (
     CancelRequest, CreateAllocationRequest, ReleaseRequest
 )
@@ -41,7 +44,9 @@ class DummyRequest:
 @pytest.fixture
 def session_factory():
     # Use SQLite in-memory database for isolated, lightning-fast tests
-    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    engine = create_engine(
+        "sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
     Base.metadata.create_all(bind=engine)
     return sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
@@ -125,17 +130,122 @@ def test_waitlist_when_no_staff_capacity(test_setup):
     assert resp.bed_id is None
     assert resp.waitlist_entry_id is not None
 
-def test_staff_failure_triggers_bed_compensation(test_setup):
+def test_uncertain_staff_failure_does_not_become_waitlisted(test_setup):
     service = test_setup["service"]
     staff_client = test_setup["staff"]
     bed_client = test_setup["bed"]
     staff_client.simulate_assignment_failure = True
 
     resp = create_allocation_endpoint(CreateAllocationRequest(admission_id="adm-open-1", pool_id="WARDA-ICU"), DummyRequest(), idempotency_key="idemp-fail-staff", service=service)
-    assert resp.status == "WAITLISTED"
-    # Verify bed was released back to AVAILABLE rather than left orphaned
-    assert bed_client.beds["bed-01"].status == "AVAILABLE"
-    assert bed_client.beds["bed-01"].current_allocation_id is None
+    assert resp.status == "RECOVERING"
+    assert resp.pending_action == "ASSIGN_STAFF"
+    # Capacity remained available, so this was not a confirmed shortage. Keep
+    # the owned bed reserved until the stable staff operation can be reconciled.
+    assert bed_client.beds["bed-01"].current_allocation_id == resp.allocation_id
+
+
+def test_matching_retry_during_processing_returns_202_and_same_allocation(test_setup):
+    service = test_setup["service"]
+    bed_client = test_setup["bed"]
+    entered = threading.Event()
+    resume = threading.Event()
+    original_allocate = bed_client.allocate_bed
+
+    def pause_after_claim(context, bed_id, allocation_id):
+        entered.set()
+        assert resume.wait(timeout=5)
+        return original_allocate(context, bed_id, allocation_id)
+
+    bed_client.allocate_bed = pause_after_claim
+    req = CreateAllocationRequest(admission_id="adm-open-1", pool_id="WARDA-ICU")
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first_call = executor.submit(
+            create_allocation_endpoint, req, DummyRequest(),
+            idempotency_key="idemp-processing", service=service,
+        )
+        assert entered.wait(timeout=5)
+        response = Response()
+        retry = create_allocation_endpoint(
+            req, DummyRequest(), idempotency_key="idemp-processing", service=service, response=response
+        )
+        assert response.status_code == 202
+        assert response.headers["Location"] == f"/api/v1/allocations/{retry.allocation_id}"
+        assert retry.status == "PROCESSING"
+        resume.set()
+        completed = first_call.result(timeout=5)
+    assert completed.allocation_id == retry.allocation_id
+    assert get_allocation_endpoint(completed.allocation_id, service).status == "ALLOCATED"
+
+
+def test_recovery_replays_uncertain_staff_operation_after_service_recreation(test_setup):
+    original = test_setup["service"]
+    staff = test_setup["staff"]
+    staff.simulate_uncertain_outcome = True
+    request = CreateAllocationRequest(admission_id="adm-open-1", pool_id="WARDA-ICU")
+    accepted = original.create_allocation(request, "req-uncertain", "idemp-uncertain")
+    assert accepted.status == "RECOVERING"
+    assert accepted.pending_action == "ASSIGN_STAFF"
+
+    staff.simulate_uncertain_outcome = False
+    restarted = BedAllocationDomainService(
+        session_factory=original.session_factory,
+        patient_client=original.patient_client,
+        triage_client=original.triage_client,
+        lock_client=original.lock_client,
+        bed_client=original.bed_client,
+        staff_client=staff,
+        owner_id="restarted-allocation-instance",
+    )
+    assert restarted.recover_pending() == 1
+    current = restarted.get_allocation(accepted.allocation_id)
+    assert current.status == "ALLOCATED"
+    assert current.staff_assignment_id in staff.assignments
+    with original.session_factory() as session:
+        claim = session.query(IdempotencyModel).filter_by(
+            method="POST", operation="CREATE", target_id="adm-open-1", idempotency_key="idemp-uncertain"
+        ).one()
+        assert claim.state == "COMPLETED"
+        operation = session.query(OperationRecoveryModel).filter_by(
+            operation_id=f"{accepted.allocation_id}:assign-staff"
+        ).one()
+        assert operation.status == "SUCCEEDED"
+
+
+def test_recovery_after_final_commit_crash_does_not_repeat_remote_effects(test_setup):
+    service = test_setup["service"]
+    request = CreateAllocationRequest(admission_id="adm-open-1", pool_id="WARDA-ICU")
+    original_finalize = service._finalize_create
+
+    def crash_before_finalize(*args, **kwargs):
+        raise RuntimeError("injected process crash before final transaction")
+
+    service._finalize_create = crash_before_finalize
+    with pytest.raises(RuntimeError):
+        service.create_allocation(request, "req-crash-final", "idemp-crash-final")
+    service._finalize_create = original_finalize
+
+    with service.session_factory() as session:
+        interrupted = session.query(AllocationModel).filter_by(admission_id="adm-open-1").one()
+        interrupted_allocation_id = interrupted.allocation_id
+        assert interrupted.status == "PROCESSING"
+        assert interrupted.pending_action == "FINALIZE_ALLOCATED"
+        interrupted.recovery_claim_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+        session.commit()
+
+    restarted = BedAllocationDomainService(
+        session_factory=service.session_factory,
+        patient_client=service.patient_client,
+        triage_client=service.triage_client,
+        lock_client=service.lock_client,
+        bed_client=service.bed_client,
+        staff_client=service.staff_client,
+        owner_id="restarted-finalizer",
+    )
+    assert restarted.recover_pending() == 1
+    current = restarted.get_allocation(interrupted_allocation_id)
+    assert current.status == "ALLOCATED"
+    assert len(service.staff_client.assignments) == 1
+    assert service.bed_client.beds[current.bed_id].current_allocation_id == current.allocation_id
 
 def test_reject_closed_admission(test_setup):
     service = test_setup["service"]
@@ -233,6 +343,7 @@ def test_postgres_concurrent_requests_use_partial_unique_index():
 
         patient_client = FakePatientRegistryClient()
         patient_client.seed_admission("adm-pg-race", "pat-pg-race", "OPEN")
+        patient_client.seed_admission("adm-pg-replay", "pat-pg-replay", "OPEN")
         request_barrier = threading.Barrier(2)
 
         class BarrierPatientClient:
@@ -244,12 +355,23 @@ def test_postgres_concurrent_requests_use_partial_unique_index():
         triage_repo = InMemoryTriageRepository()
         triage_domain = TriageDomainService(triage_repo, MockFencingValidator(True))
         triage_domain.set_triage("adm-pg-race", 1, "WARDA-ICU")
+        triage_domain.set_triage("adm-pg-replay", 1, "WARDA-ICU")
+        lock_client = FakeLockCoordinatorClient()
+        lock_calls = [0]
+        original_acquire = lock_client.acquire
+        def count_acquire(*args, **kwargs):
+            lock_calls[0] += 1
+            return original_acquire(*args, **kwargs)
+        lock_client.acquire = count_acquire
+        bed_client = FakeBedRegistryClient()
+        bed_client.seed_bed("bed-pg-race-1", "WARDA-ICU")
+        bed_client.seed_bed("bed-pg-race-2", "WARDA-ICU")
         service = BedAllocationDomainService(
             session_factory=postgres_session_factory,
             patient_client=BarrierPatientClient(),
             triage_client=DirectTriageClient(triage_domain),
-            lock_client=FakeLockCoordinatorClient(),
-            bed_client=_one_bed_client(),
+            lock_client=lock_client,
+            bed_client=bed_client,
             staff_client=FakeStaffSchedulerClient(initial_capacity=2),
             owner_id="postgres-concurrency-test"
         )
@@ -278,6 +400,31 @@ def test_postgres_concurrent_requests_use_partial_unique_index():
                 AllocationModel.status.notin_(["RELEASED", "CANCELLED", "FAILED"])
             ).count()
         assert active_count == 1
+
+        # Matching concurrent retries share the scoped durable claim and one
+        # workflow, returning the same allocation ID to both callers.
+        request_barrier = threading.Barrier(2)
+        start_lock_count = lock_calls[0]
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            replay_results = list(executor.map(lambda _: service.create_allocation(
+                CreateAllocationRequest(admission_id="adm-pg-replay", pool_id="WARDA-ICU"),
+                request_id="req-pg-replay",
+                idempotency_key="idemp-pg-replay",
+            ), range(2)))
+        assert all(not isinstance(result, AppException) for result in replay_results)
+        assert replay_results[0].allocation_id == replay_results[1].allocation_id
+        assert lock_calls[0] == start_lock_count + 1
+
+        # A matching scope with a changed payload conflicts before another
+        # workflow starts.
+        with pytest.raises(AppException) as mismatch:
+            service.create_allocation(
+                CreateAllocationRequest(admission_id="adm-pg-replay", pool_id="OTHER"),
+                request_id="req-pg-mismatch",
+                idempotency_key="idemp-pg-replay",
+            )
+        assert mismatch.value.status_code == 409
+        assert mismatch.value.code == "IDEMPOTENCY_MISMATCH"
     finally:
         if test_engine is not None:
             test_engine.dispose()
@@ -301,11 +448,11 @@ def test_idempotency_replay_and_mismatch(test_setup):
     assert resp1.allocation_id == resp2.allocation_id
     assert resp1.bed_id == resp2.bed_id
 
-    # Same key with different payload triggers 409 ALREADY_EXISTS IDEMPOTENCY_MISMATCH
-    req_mismatch = CreateAllocationRequest(admission_id="adm-open-2", pool_id="WARDA-ICU")
+    # Same scope/key with different payload triggers 409 IDEMPOTENCY_MISMATCH.
+    req_mismatch = CreateAllocationRequest(admission_id="adm-open-1", pool_id="WARDB-CCU")
     with pytest.raises(AppException) as exc:
         create_allocation_endpoint(req_mismatch, DummyRequest(), idempotency_key="idemp-replay", service=service)
-    assert exc.value.code == "ALREADY_EXISTS"
+    assert exc.value.code == "IDEMPOTENCY_MISMATCH"
 
 def test_release_and_automatic_promotion(test_setup):
     service = test_setup["service"]

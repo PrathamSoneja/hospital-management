@@ -21,6 +21,11 @@ class AllocationModel(Base):
     bed_id = Column(String(64), nullable=True)
     staff_assignment_id = Column(String(64), nullable=True)
     waitlist_entry_id = Column(String(64), nullable=True)
+    pending_action = Column(String(64), nullable=True)
+    workflow_data = Column(Text, nullable=True)
+    recovery_claim_owner = Column(String(128), nullable=True)
+    recovery_claim_until = Column(DateTime(timezone=True), nullable=True)
+    recovery_attempts = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
@@ -38,12 +43,19 @@ class AllocationModel(Base):
 class IdempotencyModel(Base):
     __tablename__ = "idempotency_keys"
 
+    method = Column(String(8), primary_key=True)
+    operation = Column(String(32), primary_key=True)
+    target_id = Column(String(128), primary_key=True)
     idempotency_key = Column(String(128), primary_key=True)
     endpoint = Column(String(128), nullable=False)
     request_hash = Column(String(64), nullable=False)
-    response_status = Column(Integer, nullable=False)
-    response_body = Column(Text, nullable=False)
+    state = Column(String(16), nullable=False, default="IN_PROGRESS")
+    allocation_id = Column(String(64), nullable=True, index=True)
+    action_id = Column(String(128), nullable=True)
+    response_status = Column(Integer, nullable=True)
+    response_body = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
 class OutboxEventModel(Base):
     __tablename__ = "outbox_events"
@@ -78,4 +90,5 @@ def get_engine(database_url: str = None):
     return create_engine(url, pool_pre_ping=True, pool_size=10, max_overflow=20)
 
 def init_db(engine):
+    """Test-only metadata bootstrap. Production startup uses Alembic migrations."""
     Base.metadata.create_all(bind=engine)

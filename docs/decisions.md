@@ -90,6 +90,11 @@ This document records sensible architectural decisions, technical trade-offs, an
   - Validate lock ownership through the Coordinator, while documenting that this external validation is not atomic with the Firestore commit and therefore has a lease-validation race.
 - **Status**: Approved by Pratham Soneja on 2026-10-29; implementation pending.
 
+## 10. Allocation Durable Idempotency and Recovery
+- **Decision**: Allocation claims are scoped by HTTP method, operation, target, and idempotency key; a canonical request fingerprint prevents reuse with a different payload. The claim and stable allocation/action identifiers are persisted before remote mutations. Matching in-progress retries return 202 with the same allocation and its GET location; only completed outcomes are cached as final responses.
+- **Recovery**: Persist each remote operation intent before the call and its confirmed or uncertain outcome afterward. Reuse operation IDs, claim expired work exclusively, and never hold a PostgreSQL transaction across network calls. Unknown outcomes are reconciled; compensation is limited to owned resources. Release is durable before promotion, and promotion failure preserves the release and queue retry path.
+- **Status**: Approved by Pratham Soneja on 2026-10-29. Step 2 implementation and verification are in progress; current create-path evidence and outstanding release/cancel recovery gaps are in `docs/handoff.md`.
+
 ---
 
 ## 6. Outbox Pattern & Messaging Integration

@@ -79,6 +79,7 @@ class FakeLockCoordinatorClient(LockCoordinatorClient):
 class FakeBedRegistryClient(BedRegistryClient):
     def __init__(self):
         self.beds: Dict[str, BedDto] = {}
+        self.operations: Dict[str, Tuple[str, str]] = {}
         self.simulate_allocate_failure = False
 
     def seed_bed(self, bed_id: str, pool_id: str, ward: str = "ICU-A"):
@@ -90,6 +91,11 @@ class FakeBedRegistryClient(BedRegistryClient):
         return [b for b in self.beds.values() if b.pool_id == pool_id and b.status == "AVAILABLE"]
 
     def allocate_bed(self, context, bed_id: str, allocation_id: str) -> Tuple[bool, Optional[BedDto], str]:
+        if context.operation_id in self.operations:
+            result_bed_id, result_allocation_id = self.operations[context.operation_id]
+            bed = self.beds.get(result_bed_id)
+            if result_allocation_id == allocation_id and bed:
+                return True, bed, ""
         if self.simulate_allocate_failure:
             return False, None, "Simulated bed allocation failure"
         bed = self.beds.get(bed_id)
@@ -100,9 +106,12 @@ class FakeBedRegistryClient(BedRegistryClient):
 
         bed.status = "OCCUPIED"
         bed.current_allocation_id = allocation_id
+        self.operations[context.operation_id] = (bed_id, allocation_id)
         return True, bed, ""
 
     def release_bed(self, context, bed_id: str, allocation_id: str) -> Tuple[bool, str]:
+        if context.operation_id in self.operations:
+            return True, ""
         bed = self.beds.get(bed_id)
         if not bed:
             return False, f"Bed {bed_id} not found"
@@ -112,6 +121,7 @@ class FakeBedRegistryClient(BedRegistryClient):
 
         bed.status = "AVAILABLE"
         bed.current_allocation_id = None
+        self.operations[context.operation_id] = (bed_id, allocation_id)
         return True, ""
 
 class FakeStaffSchedulerClient(StaffSchedulerClient):
@@ -119,6 +129,8 @@ class FakeStaffSchedulerClient(StaffSchedulerClient):
         self.capacity: Dict[str, int] = {}
         self.default_capacity = initial_capacity
         self.assignments: Dict[str, Tuple[str, str]] = {} # assignment_id -> (allocation_id, bed_id)
+        self.assignment_operations: Dict[str, Tuple[str, str, str]] = {}
+        self.release_operations: set[str] = set()
         self.simulate_capacity_exhausted = False
         self.simulate_assignment_failure = False
         self.simulate_uncertain_outcome = False
@@ -133,6 +145,9 @@ class FakeStaffSchedulerClient(StaffSchedulerClient):
         return (cap > 0), cap
 
     def assign_staff(self, context, allocation_id: str, bed_id: str) -> Tuple[bool, Optional[str], Optional[str], str]:
+        if context.operation_id in self.assignment_operations:
+            assignment_id, staff_id, _ = self.assignment_operations[context.operation_id]
+            return True, assignment_id, staff_id, ""
         if self.simulate_uncertain_outcome:
             raise AppException(
                 code="DEADLINE_EXCEEDED",
@@ -150,14 +165,18 @@ class FakeStaffSchedulerClient(StaffSchedulerClient):
         assignment_id = f"staff-asgn-{uuid.uuid4().hex[:8]}"
         staff_id = f"nurse-{uuid.uuid4().hex[:6]}"
         self.assignments[assignment_id] = (allocation_id, bed_id)
+        self.assignment_operations[context.operation_id] = (assignment_id, staff_id, allocation_id)
         self.capacity[context.pool_id] = cap - 1
         return True, assignment_id, staff_id, ""
 
     def release_assignment(self, context, staff_assignment_id: str, allocation_id: str) -> Tuple[bool, str]:
+        if context.operation_id in self.release_operations:
+            return True, ""
         if staff_assignment_id in self.assignments:
             expected_alloc, _ = self.assignments[staff_assignment_id]
             if expected_alloc == allocation_id:
                 del self.assignments[staff_assignment_id]
+                self.release_operations.add(context.operation_id)
                 cap = self.capacity.get(context.pool_id, self.default_capacity)
                 self.capacity[context.pool_id] = cap + 1
                 return True, ""
