@@ -5,7 +5,7 @@ Supports Cloud SQL PostgreSQL, local Docker PostgreSQL, and SQLite in tests.
 import os
 from datetime import datetime, timezone
 from sqlalchemy import (
-    Column, String, Integer, DateTime, Text, Boolean, UniqueConstraint, Index, create_engine
+    Column, String, Integer, DateTime, Text, Boolean, UniqueConstraint, Index, create_engine, text
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -26,6 +26,13 @@ class AllocationModel(Base):
 
     __table_args__ = (
         Index("idx_admission_status", "admission_id", "status"),
+        Index(
+            "uq_allocations_active_admission",
+            "admission_id",
+            unique=True,
+            postgresql_where=text("status NOT IN ('RELEASED', 'CANCELLED', 'FAILED')"),
+            sqlite_where=text("status NOT IN ('RELEASED', 'CANCELLED', 'FAILED')"),
+        ),
     )
 
 class IdempotencyModel(Base):

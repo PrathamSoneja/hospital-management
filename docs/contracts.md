@@ -48,12 +48,17 @@ All error responses strictly follow this format:
 |---|---|---|---|---|
 | Schema / Field validation error | 400 | `INVALID_ARGUMENT` | `INVALID_ARGUMENT` | No |
 | Resource not found | 404 | `NOT_FOUND` | `NOT_FOUND` | No |
-| Conflicting state / Active request exists | 409 | `FAILED_PRECONDITION` | `STATE_CONFLICT` | No |
+| Other conflicting state | 409 | `FAILED_PRECONDITION` | `STATE_CONFLICT` | No |
+| Partial unique active-admission index violation | 409 | n/a | `ACTIVE_ALLOCATION_EXISTS` | No |
 | Idempotency Key reused with different payload | 409 | `ALREADY_EXISTS` | `IDEMPOTENCY_MISMATCH` | No |
 | Downstream service unreachable | 503 | `UNAVAILABLE` | `SERVICE_UNAVAILABLE` | Yes |
 | Deadline / Timeout exceeded | 504 | `DEADLINE_EXCEEDED` | `DEADLINE_EXCEEDED` | Yes |
 
 *Note: Waitlisting is a successful business outcome (HTTP 201), never an error.*
+
+If an allocation create or release has been durably accepted but remains unresolved, return HTTP 202 with `allocation_id`, `status: RECOVERING`, and `pending_action`; include a `Location` header pointing to `GET /api/v1/allocations/{allocation_id}`. GET returns the same recovery state. Do not return 202 if durable acceptance is uncertain. Retries with the same idempotency key must not start another workflow.
+
+Only `RELEASED`, `CANCELLED`, and `FAILED` are terminal for admission uniqueness. `FAILED` is terminal only after confirming there is no active downstream ownership. A matching PostgreSQL partial unique-index violation maps to `ACTIVE_ALLOCATION_EXISTS`; idempotency replay is checked first.
 
 ---
 

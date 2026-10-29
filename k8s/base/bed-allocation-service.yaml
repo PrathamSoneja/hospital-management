@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: bed-allocation-service
+  labels:
+    app.kubernetes.io/name: bed-allocation-service
+spec:
+  type: ClusterIP
+  selector:
+    app: bed-allocation-service
+  ports:
+    - name: http-rest
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: bed-allocation-sa
+  annotations:
+    # Workload Identity Federation binding to GCP Service Account for Pub/Sub & Cloud SQL
+    iam.gke.io/gcp-service-account: bed-allocation-sa@hospital-bed-mgmt-dev.iam.gserviceaccount.com

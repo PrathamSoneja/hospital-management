@@ -31,6 +31,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Allocation'
+        '202':
+          description: Request durably accepted and awaiting recovery
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecoveryAccepted'
         '400':
           $ref: '#/components/responses/ErrorResponse400'
         '409':
@@ -50,7 +61,7 @@ paths:
           required: false
           schema:
             type: string
-            enum: [REQUESTED, ALLOCATED, WAITLISTED, RELEASED, CANCELLED]
+            enum: [REQUESTED, PROCESSING, ALLOCATED, WAITLISTED, RELEASING, CANCELLING, RECOVERING, RELEASED, CANCELLED, FAILED]
         - name: admission_id
           in: query
           required: false
@@ -141,6 +152,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReleaseResult'
+        '202':
+          description: Release durably accepted and awaiting recovery
+          headers:
+            Location:
+              required: true
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecoveryAccepted'
         '400':
           $ref: '#/components/responses/ErrorResponse400'
         '404':
@@ -222,7 +244,7 @@ components:
           type: string
         status:
           type: string
-          enum: [REQUESTED, ALLOCATED, WAITLISTED, RELEASED, CANCELLED]
+          enum: [REQUESTED, PROCESSING, ALLOCATED, WAITLISTED, RELEASING, CANCELLING, RECOVERING, RELEASED, CANCELLED, FAILED]
         bed_id:
           type: string
           nullable: true
@@ -232,9 +254,25 @@ components:
         waitlist_entry_id:
           type: string
           nullable: true
+        pending_action:
+          type: string
+          nullable: true
         created_at:
           type: string
           format: date-time
+
+    RecoveryAccepted:
+      allOf:
+        - $ref: '#/components/schemas/Allocation'
+        - type: object
+          required:
+            - pending_action
+          properties:
+            status:
+              type: string
+              enum: [RECOVERING]
+            pending_action:
+              type: string
 
     ReleaseResult:
       type: object

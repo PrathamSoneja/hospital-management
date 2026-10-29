@@ -1,0 +1,122 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "HTTP Request Rate (RPS)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total[1m])) by (service)",
+          "legendFormat": "{{service}} RPS"
+        }
+      ]
+    },
+    {
+      "title": "HTTP 5xx Error Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{status=~\"5..\"}[1m])) by (service)",
+          "legendFormat": "{{service}} 5xx"
+        }
+      ]
+    },
+    {
+      "title": "p50 / p95 Latency",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket[1m])) by (le, service))",
+          "legendFormat": "{{service}} p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[1m])) by (le, service))",
+          "legendFormat": "{{service}} p95"
+        }
+      ]
+    },
+    {
+      "title": "Allocation Outcomes (Allocated vs Waitlisted)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(allocation_requests_total[1m])) by (outcome, pool_id)",
+          "legendFormat": "{{pool_id}} - {{outcome}}"
+        }
+      ]
+    },
+    {
+      "title": "Distributed Lock Wait Duration (Seconds)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(lock_wait_seconds_bucket[1m])) by (le, pool_id))",
+          "legendFormat": "{{pool_id}} p95 Lock Wait"
+        }
+      ]
+    },
+    {
+      "title": "Waitlist Population (Active Waiting Patients)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(waitlist_entries) by (pool_id)",
+          "legendFormat": "{{pool_id}} waiting"
+        }
+      ]
+    },
+    {
+      "title": "Transactional Outbox Backlog",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum(outbox_pending_events) by (destination)",
+          "legendFormat": "{{destination}} pending"
+        }
+      ]
+    },
+    {
+      "title": "HPA Current vs Desired Replicas",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
+      "targets": [
+        {
+          "expr": "kube_horizontalpodautoscaler_status_current_replicas{horizontalpodautoscaler=~\"(bed-allocation|triage)-hpa\"}",
+          "legendFormat": "{{horizontalpodautoscaler}} current"
+        },
+        {
+          "expr": "kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=~\"(bed-allocation|triage)-hpa\"}",
+          "legendFormat": "{{horizontalpodautoscaler}} desired"
+        }
+      ]
+    },
+    {
+      "title": "Pod CPU & Memory Utilization",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum(rate(container_cpu_usage_seconds_total{container=~\"(bed-allocation|triage)\"}[1m])) by (container)",
+          "legendFormat": "{{container}} CPU cores"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "title": "Hospital Management - Allocation & Triage Service Overview",
+  "uid": "hospital-overview",
+  "version": 1
+}

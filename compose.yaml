@@ -1,0 +1,103 @@
+services:
+  # ============================================================================
+  # Core Local Databases & Emulators
+  # ============================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: hospital-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: hospital_allocation
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  firestore-emulator:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
+    container_name: hospital-firestore-emulator
+    command: gcloud beta emulators firestore start --host-port=0.0.0.0:8080
+    ports:
+      - "8080:8080"
+
+  pubsub-emulator:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
+    container_name: hospital-pubsub-emulator
+    command: gcloud beta emulators pubsub start --host-port=0.0.0.0:8085
+    ports:
+      - "8085:8085"
+
+  # ============================================================================
+  # Application Services (Pratham Soneja)
+  # ============================================================================
+  triage-service:
+    build:
+      context: .
+      dockerfile: services/triage/Dockerfile
+    container_name: hospital-triage
+    environment:
+      TRIAGE_REST_HOST: 0.0.0.0
+      TRIAGE_REST_PORT: 8000
+      TRIAGE_GRPC_HOST: 0.0.0.0
+      TRIAGE_GRPC_PORT: 50051
+      START_GRPC: "true"
+      TRIAGE_STORAGE_BACKEND: firestore
+      FIRESTORE_PROJECT_ID: hospital-bed-mgmt-dev
+      FIRESTORE_EMULATOR_HOST: firestore-emulator:8080
+    ports:
+      - "8001:8000"
+      - "50052:50051"
+    depends_on:
+      - firestore-emulator
+
+  bed-allocation-service:
+    build:
+      context: .
+      dockerfile: services/bed_allocation/Dockerfile
+    container_name: hospital-bed-allocation
+    environment:
+      ALLOCATION_REST_HOST: 0.0.0.0
+      ALLOCATION_REST_PORT: 8000
+      DATABASE_URL: postgresql://postgres:postgrespassword@postgres:5432/hospital_allocation
+      TRIAGE_SERVICE_ADDR: triage-service:50051
+      USE_FAKES: "true"
+      PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
+    ports:
+      - "8002:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      triage-service:
+        condition: service_started
+
+  # ============================================================================
+  # Observability (Prometheus & Grafana)
+  # ============================================================================
+  prometheus:
+    image: prom/prometheus:v2.50.0
+    container_name: hospital-prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:10.3.3
+    container_name: hospital-grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./monitoring/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      - prometheus
+
+volumes:
+  pgdata:

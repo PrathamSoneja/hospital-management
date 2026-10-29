@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bed-allocation-service
+  labels:
+    app.kubernetes.io/name: bed-allocation-service
+    app.kubernetes.io/part-of: hospital-bed-management
+spec:
+  # Initial replica count managed by HPA; ArgoCD configured with ignoreDifferences on /spec/replicas
+  replicas: 2
+  selector:
+    matchLabels:
+      app: bed-allocation-service
+  template:
+    metadata:
+      labels:
+        app: bed-allocation-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: bed-allocation-sa
+      containers:
+        - name: bed-allocation
+          image: us-central1-docker.pkg.dev/hospital-bed-mgmt-dev/hospital-repo/bed-allocation:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http-rest
+              containerPort: 8000
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: ALLOCATION_REST_HOST
+              value: "0.0.0.0"
+            - name: ALLOCATION_REST_PORT
+              value: "8000"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: cloudsql-db-credentials
+                  key: DATABASE_URL
+            - name: LOCK_SERVICE_ADDR
+              value: "lock-coordinator-service:50051"
+            - name: BED_SERVICE_ADDR
+              value: "bed-registry-service:50051"
+            - name: STAFF_SERVICE_ADDR
+              value: "staff-scheduler-service:50051"
+            - name: TRIAGE_SERVICE_ADDR
+              value: "triage-service:50051"
+            - name: PATIENT_SERVICE_URL
+              value: "http://patient-registry-service:8000/api/v1"
+            - name: USE_FAKES
+              value: "false"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5

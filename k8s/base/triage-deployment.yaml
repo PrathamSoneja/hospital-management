@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: triage-service
+  labels:
+    app.kubernetes.io/name: triage-service
+    app.kubernetes.io/part-of: hospital-bed-management
+spec:
+  # Initial replica count managed by HPA; ArgoCD configured with ignoreDifferences on /spec/replicas
+  replicas: 2
+  selector:
+    matchLabels:
+      app: triage-service
+  template:
+    metadata:
+      labels:
+        app: triage-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: triage-sa
+      containers:
+        - name: triage
+          image: us-central1-docker.pkg.dev/hospital-bed-mgmt-dev/hospital-repo/triage:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http-rest
+              containerPort: 8000
+            - name: grpc-internal
+              containerPort: 50051
+          env:
+            - name: TRIAGE_REST_HOST
+              value: "0.0.0.0"
+            - name: TRIAGE_REST_PORT
+              value: "8000"
+            - name: TRIAGE_GRPC_PORT
+              value: "50051"
+            - name: START_GRPC
+              value: "true"
+            - name: TRIAGE_STORAGE_BACKEND
+              value: "firestore"
+            - name: FIRESTORE_PROJECT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: hospital-config
+                  key: GCP_PROJECT_ID
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
