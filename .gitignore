@@ -69,3 +69,6 @@ Thumbs.db
 pgdata/
 zookeeper_data/
 kafka_data/
+docs/audit.md
+docs/next-steps.md
+docs/*.md
