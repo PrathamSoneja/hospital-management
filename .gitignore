@@ -48,6 +48,11 @@ credentials.json
 **/.terraform/*
 *.tfstate
 *.tfstate.*
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+backend.hcl
+*.plan
 crash.log
 override.tf
 override.tf.json
