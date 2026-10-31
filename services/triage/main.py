@@ -14,6 +14,7 @@ from services.triage.validation import RemoteLockValidator
 from services.triage.lock_coordinator import GrpcLockCoordinatorClient
 from services.triage.rest import router as triage_router, set_service
 from services.triage.grpc_server import create_grpc_server
+from shared.config.runtime import validate_cloud_runtime
 from shared.observability.errors import register_error_handlers
 from shared.observability.logging import setup_logger
 from shared.observability.middleware import setup_observability_middleware
@@ -30,6 +31,7 @@ def build_app(backend: str | None = None, start_grpc: bool = False) -> FastAPI:
         raise ValueError("TRIAGE_STORAGE_BACKEND=memory is permitted only when ENVIRONMENT=test")
     if fencing_mode != "coordinator":
         raise ValueError(f"Unknown TRIAGE_FENCING_MODE: {fencing_mode}; only coordinator is supported")
+    validate_cloud_runtime(["LOCK_COORDINATOR_ADDR"])
 
     logger.info("triage_configuration_loaded", extra={
         "event": "triage_configuration_loaded", "backend": backend_mode,

@@ -17,6 +17,7 @@ from services.bed_allocation.outbox.dispatcher import OutboxDispatcher, OutboxWo
 from services.bed_allocation.outbox.publishers import build_event_publisher_from_env
 from services.bed_allocation.rest import router as allocation_router, set_service
 from services.bed_allocation.service import BedAllocationDomainService
+from shared.config.runtime import ConfigError, bounded_int, runtime_profile, validate_cloud_runtime
 from shared.observability.errors import register_error_handlers
 from shared.observability.logging import setup_logger
 from shared.observability.middleware import setup_observability_middleware
@@ -31,16 +32,23 @@ def _required_setting(name: str) -> str:
 
 
 def build_app(database_url: str = None, clients: dict | None = None, event_publisher=None) -> FastAPI:
+    endpoints = ["LOCK_SERVICE_ADDR", "BED_SERVICE_ADDR", "STAFF_SERVICE_ADDR", "TRIAGE_SERVICE_ADDR", "PATIENT_SERVICE_URL"]
+    if os.environ.get("ENABLE_OUTBOX_WORKER", "false").lower() == "true":
+        endpoints.append("KAFKA_BOOTSTRAP_SERVERS")
+    profile = validate_cloud_runtime(endpoints)
+    rpc_timeout_s = bounded_int("RPC_TIMEOUT_MS", 2000, 100, 30000) / 1000
     engine = get_engine(database_url)
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     if clients is None:
         logger.info("Initializing Bed Allocation Service with real dependency adapters")
-        lock_client = GrpcLockCoordinatorClient(_required_setting("LOCK_SERVICE_ADDR"))
-        bed_client = GrpcBedRegistryClient(_required_setting("BED_SERVICE_ADDR"))
-        staff_client = GrpcStaffSchedulerClient(_required_setting("STAFF_SERVICE_ADDR"))
-        triage_client = GrpcTriageClient(_required_setting("TRIAGE_SERVICE_ADDR"))
-        patient_client = HttpPatientRegistryClient(_required_setting("PATIENT_SERVICE_URL"))
+        lock_client = GrpcLockCoordinatorClient(_required_setting("LOCK_SERVICE_ADDR"), rpc_timeout_s)
+        bed_client = GrpcBedRegistryClient(_required_setting("BED_SERVICE_ADDR"), rpc_timeout_s)
+        staff_client = GrpcStaffSchedulerClient(_required_setting("STAFF_SERVICE_ADDR"), rpc_timeout_s)
+        triage_client = GrpcTriageClient(_required_setting("TRIAGE_SERVICE_ADDR"), rpc_timeout_s)
+        patient_client = HttpPatientRegistryClient(_required_setting("PATIENT_SERVICE_URL"), rpc_timeout_s)
     else:
+        if profile not in {"test", "local"}:
+            raise ConfigError("Injected local/test adapters are not permitted in a cloud profile")
         required_clients = {"lock", "bed", "staff", "triage", "patient"}
         missing = sorted(required_clients - clients.keys())
         if missing:
@@ -58,7 +66,9 @@ def build_app(database_url: str = None, clients: dict | None = None, event_publi
         lock_client=lock_client,
         bed_client=bed_client,
         staff_client=staff_client,
-        owner_id=os.environ.get("POD_NAME", "bed-alloc-instance-1")
+        owner_id=os.environ.get("POD_NAME", "bed-alloc-instance-1"),
+        lock_lease_ms=bounded_int("LOCK_LEASE_MS", 10000, 1000, 120000),
+        lock_wait_timeout_ms=bounded_int("LOCK_WAIT_TIMEOUT_MS", 5000, 100, 60000),
     )
     set_service(domain_service)
 

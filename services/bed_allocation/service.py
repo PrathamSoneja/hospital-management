@@ -140,7 +140,9 @@ class BedAllocationDomainService:
         lock_client: LockCoordinatorClient,
         bed_client: BedRegistryClient,
         staff_client: StaffSchedulerClient,
-        owner_id: str = "bed-alloc-instance-1"
+        owner_id: str = "bed-alloc-instance-1",
+        lock_lease_ms: int = 10000,
+        lock_wait_timeout_ms: int = 5000,
     ):
         self.session_factory = session_factory
         self.patient_client = patient_client
@@ -149,6 +151,8 @@ class BedAllocationDomainService:
         self.bed_client = bed_client
         self.staff_client = staff_client
         self.owner_id = owner_id
+        self.lock_lease_ms = lock_lease_ms
+        self.lock_wait_timeout_ms = lock_wait_timeout_ms
 
     def _hash_payload(self, payload: dict) -> str:
         serialized = json.dumps(payload, sort_keys=True)
@@ -434,8 +438,8 @@ class BedAllocationDomainService:
                 pool_id=req.pool_id,
                 owner_id=self.owner_id,
                 acquire_id=f"acq-{allocation_id}",
-                lease_ms=10000,
-                wait_timeout_ms=5000,
+                lease_ms=self.lock_lease_ms,
+                wait_timeout_ms=self.lock_wait_timeout_ms,
             )
         except Exception as error:
             return self._mark_recovering(
@@ -742,7 +746,7 @@ class BedAllocationDomainService:
             record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
             pool_id = record.pool_id
         try:
-            lease = self.lock_client.acquire(pool_id, self.owner_id, f"acq-promotion-{uuid.uuid4().hex}", 10000, 5000)
+            lease = self.lock_client.acquire(pool_id, self.owner_id, f"acq-promotion-{uuid.uuid4().hex}", self.lock_lease_ms, self.lock_wait_timeout_ms)
         except Exception:
             return
         try:
@@ -1103,7 +1107,7 @@ class BedAllocationDomainService:
             data = json.loads(record.workflow_data or "{}")
             pool_id, bed_id, assignment_id = record.pool_id, record.bed_id, record.staff_assignment_id
         try:
-            lease = self.lock_client.acquire(pool_id, self.owner_id, f"acq-release-{uuid.uuid4().hex}", 10000, 5000)
+            lease = self.lock_client.acquire(pool_id, self.owner_id, f"acq-release-{uuid.uuid4().hex}", self.lock_lease_ms, self.lock_wait_timeout_ms)
         except Exception as error:
             return self._mark_recovering(allocation_id, "RELEASE_BED", f"{allocation_id}:release-bed", "RELEASE_BED", error)
         released = False
@@ -1161,7 +1165,7 @@ class BedAllocationDomainService:
                 record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
                 data = json.loads(record.workflow_data or "{}")
                 pool_id, reason = record.pool_id, data.get("reason", "cancelled")
-            lease = self.lock_client.acquire(pool_id, self.owner_id, f"acq-cancel-{uuid.uuid4().hex}", 10000, 5000)
+            lease = self.lock_client.acquire(pool_id, self.owner_id, f"acq-cancel-{uuid.uuid4().hex}", self.lock_lease_ms, self.lock_wait_timeout_ms)
         except Exception as error:
             return self._mark_recovering(allocation_id, "CANCEL_QUEUE", f"{allocation_id}:cancel-waitlist", "CANCEL_QUEUE", error)
         try:

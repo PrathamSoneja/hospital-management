@@ -37,7 +37,8 @@ coverage.xml
 *.env
 .env.*
 !.env.example
-!.env.production.example
+!.env.gcp.example
+!.env.local.example
 *.pem
 *.key
 *.cert
