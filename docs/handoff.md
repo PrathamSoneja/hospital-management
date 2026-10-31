@@ -1,6 +1,67 @@
 # Project Handoff
 
-Updated: 2026-10-30
+Updated: 2026-10-31
+
+## Outbox Milestone (2026-10-31, latest)
+
+This section supersedes every older statement below, including "Current Workspace Update".
+
+- **Branch:** local `feature/outbox-delivery` (committing on `master` was blocked by review). Local commits: `0bc54ac` runtime/test-support split, `388bdbe` outbox sequencing+claims, `29426b6` broker adapters+worker, `d2fee50` observability labels/queries, `7a23330` Patient admission contract, `3717df0` k6+CI (unrun). Not pushed.
+- **LOCAL-VERIFIED (outbox core):** migration `20261031_03` adds `outbox_stream_counters(destination, pool_id)`, `pool_id`, `stream_sequence`, `attempt_count`, `available_at`, claim owner/token/expiry, bounded `last_error`, and unique `(destination, pool_id, stream_sequence)`. Sequences come from the counter row incremented inside the business transaction (rollback consumes none; counters taken in fixed kafka→pubsub order). Workers claim only the head of each stream with `FOR UPDATE SKIP LOCKED`, commit, publish outside any transaction, then ACK/retry only if the claim token still matches. Backoff is exponential and capped. `POISONED` blocks only its stream. Operator actions: `retry_poisoned(event_id)` and `resolve(event_id, note)` (sets `RESOLVED`, row kept for audit).
+- **LOCAL-VERIFIED (payloads):** emitted payloads validate against both schemas. Ward comes from the Bed Registry's bed record and patient ID from the persisted admission lookup; `ICU-A`/`pat-<id>` fabrications are removed. Occupancy: +1 allocated (including promotion, which previously emitted no event), −1 released, 0 waitlisted. `lock_wait_ms` is the Coordinator-reported wait observed once per acquisition (promotion sharing the release's lock reports null). `allocation_wait_ms` is acceptance→allocation, null otherwise.
+- **DECISION NEEDED:** notification schema requires `ward`, but a waitlisted allocation has no bed. Until decided, the waitlisted Pub/Sub notification is **not emitted** (Kafka event still is). No ward is derived from the pool.
+- **LOCAL-VERIFIED (migration):** fresh `hospital_outbox_empty_test` → `20261031_03`; `hospital_outbox_upgrade_test` at `20261029_02` with 3 legacy rows → upgrade (pool copied only from exact payload `pool_id`; `FAILED`→`POISONED`; sequence left NULL; counts logged) → downgrade → upgrade. `alembic check` reports no model drift. Shared/original DB untouched.
+- **MOCK-TESTED:** Pub/Sub adapter waits on the publish future with a deadline; Kafka adapter uses `acks=all`, idempotent producer, key=`pool_id`, and requires a delivery report. Tested only with client doubles. `google-cloud-pubsub`/`confluent-kafka` are declared but not installed here (no package network). **Real broker publish NOT VERIFIED.**
+- **At-least-once only:** publish-then-crash-before-ACK redelivers the same `event_id`/`stream_sequence` (tested). Claim tokens fence DB updates, not delayed broker writes; no exactly-once or strict broker-order claim under claim expiry. Consumers dedupe on `event_id` and detect gaps with `stream_sequence`; they must not drop lower sequences automatically.
+- **TEAMMATE-BLOCKED:** `stream_sequence` acceptance by Nisarg (Notification) and Jay (Resource Analytics/Flink) is PENDING. Kafka bootstrap/topic/partition/security details and actual Pub/Sub topic access are needed; no cloud resource was queried or created.
+
+### Legacy/poison operator procedure
+
+1. Report: `OutboxDispatcher(...).stream_report()` and `.legacy_blockers()` / `.poison_rows()` (event IDs, destinations, pools — no payloads).
+2. Poison: fix the cause, then `retry_poisoned(event_id)` (fresh attempt budget).
+3. Legacy unsequenced rows (or poison that must not be delivered): confirm with the consumer owner, deliver out-of-band if needed, then `resolve(event_id, note)`. Nothing is skipped, deleted, or backfilled automatically. A legacy row with NULL `pool_id` blocks its whole destination.
+
+### Outbox checks
+
+- `$env:TEST_POSTGRES_URL='postgresql+psycopg2://postgres:postgrespassword@localhost:5432/hospital_allocation_pratham_test'; $env:FIRESTORE_EMULATOR_HOST='localhost:8080'; .venv\Scripts\python.exe -m pytest -p no:cacheprovider tests\test_allocation_service.py tests\test_allocation_firestore_recovery.py tests\test_allocation_runtime_config.py tests\test_triage_service.py tests\test_triage_firestore_operations.py tests\test_triage_put_firestore.py tests\test_triage_lock_coordinator.py tests\test_patient_registry_client.py tests\test_observability_middleware.py tests\contracts\test_event_schemas.py tests\test_outbox_postgres.py tests\test_outbox_publishers.py -q` → **89 passed, 11 warnings, 0 skipped**.
+- Mutation check: removing the per-stream predecessor guard fails 3 outbox tests.
+- Without PostgreSQL/emulator (CI-like): `pytest -q --ignore=tests\test_patient_registry.py` → 65 passed, 24 skipped. `tests\test_patient_registry.py` still fails collection (`google.cloud.storage` missing). The CI workflow has no PostgreSQL/emulator services, so it would skip the outbox and Firestore tests.
+
+### Next three actions
+
+1. Decide the waitlisted-notification `ward` question; get Nisarg/Jay acceptance of `stream_sequence`.
+2. With package network: install declared deps and run Patient tests; with approved broker details: one real Pub/Sub and Kafka publish against approved non-production targets.
+3. Add disposable PostgreSQL (and the Firestore emulator) to CI if approved; then review k6 scripts and HPA manifests.
+
+## Current Workspace Update (2026-10-31)
+
+This section supersedes older status statements below where they conflict.
+
+- **LOCAL-VERIFIED:** Focused regression command with `TEST_POSTGRES_URL` targeting `hospital_allocation_pratham_test` and `FIRESTORE_EMULATOR_HOST=localhost:8080`: `tests\test_allocation_service.py`, `test_allocation_firestore_recovery.py`, `test_allocation_runtime_config.py`, `test_triage_service.py`, `test_triage_firestore_operations.py`, `test_triage_put_firestore.py`, `test_triage_lock_coordinator.py`, `test_patient_registry_client.py`, `test_observability_middleware.py`, and `tests\contracts\test_event_schemas.py` -> **68 passed, 11 warnings, 0 skipped**.
+- **LOCAL-VERIFIED:** `docker compose config --quiet`; Terraform format check; local YAML/JSON and OpenAPI reference checks passed. Prometheus readiness and alert rule group verified. Grafana health, Prometheus datasource, and provisioned dashboard verified through its local API.
+- **GENERATED-UNDEPLOYED:** Allocation, Triage, and Patient Registry Docker image builds completed with local-check tags. These builds do not imply running/deployed services.
+- **TEAMMATE-BLOCKED:** Patient Registry tests could not collect in the workspace virtualenv: `google.cloud.storage` is absent. Installing the declared `google-cloud-storage` dependency failed because package index DNS/network is unavailable. The HTTP admission-client contract tests passed independently. No cloud service was called.
+- **LOCAL-VERIFIED:** Allocation's Patient Registry adapter now requires matching `admission_id`, nonempty `patient_id`, and nonempty `status`; it no longer fabricates values. Focused OpenAPI describes GET/POST admissions, and Terraform declares the Cloud SQL database-name output. No Terraform state is present; applied outputs/status are unknown and were not queried.
+- **LOCAL-VERIFIED:** Explicit local Allocation demo launcher injects ignored stubs; production construction requires real dependency configuration and does not import `dev-local/` or `tests/support/`. Triage fake fencing and fake event publisher were removed from production modules. `tests/support/` remains tracked-capable and reusable. Compose retains PostgreSQL as actual local storage; app services are opt-in profile services.
+- **UNVERIFIED:** Outbox publisher/worker and durable delivery workflow remain unimplemented. The approved claim/backoff/poison behavior still needs the approved durable per-stream sequence source; no event schema or database migration was added pending that decision. Pub/Sub and Kafka are not locally available. At-least-once duplicates remain possible; claim tokens alone cannot fence delayed broker writes.
+- **LOCAL-VERIFIED:** k6 contention and sustained multi-pool scripts and CI workflow are present. k6 is not installed, scripts were not run, and no HPA scaling was observed. Cloud Logging is cloud-unverified.
+- **TEAMMATE-BLOCKED:** All eight microservices are undeployed. A Patient Registry HTTP adapter contract is defined; Lock Coordinator is owned by Nisarg (gRPC/ZooKeeper), Bed Registry by Jay (gRPC), Staff Scheduler by Ruchi (gRPC), Notification by Nisarg (Pub/Sub/Eventarc), Resource Analytics by Jay (Kafka consumer/Flink), and Patient Registry by Ruchi (REST). Expected endpoints/RPCs are in `docs/contracts.md` and `contracts/proto/`; live endpoint configuration and deployed service availability are absent. Local Triage tests use explicit test collaborators; live Coordinator validation is not established.
+- Tracked local-only paths staged for exact removal, with copies preserved locally: `.env.example` and `services/bed_allocation/clients/fakes.py`. No secrets are included in tracked configuration. `.env` and `dev-local/` are ignored; `tests/support/`, scripts, Compose, and real data models remain trackable.
+- **UNCOMMITTED:** The Git review blocked committing on the current default branch and identified `.gitignore` staging as outside the retained approval. `.gitignore` is now unstaged; the dev-local/runtime slice remains staged, and contract/monitoring/k6/handoff changes remain unstaged. No commit was created.
+- **CLOUD-UNVERIFIED:** No cloud queries, writes, deployments, pushes, original/shared database migration, reset, or volume deletion occurred. No HPA runtime scaling evidence. This work does not address Allocation queue-fencing or event-publishing defects.
+
+### Current runnable checks
+
+- `docker compose config --quiet`
+- `$env:TEST_POSTGRES_URL='postgresql+psycopg2://postgres:postgrespassword@localhost:5432/hospital_allocation_pratham_test'; $env:FIRESTORE_EMULATOR_HOST='localhost:8080'; .venv\Scripts\python.exe -m pytest -p no:cacheprovider tests\test_allocation_service.py tests\test_allocation_firestore_recovery.py tests\test_allocation_runtime_config.py tests\test_triage_service.py tests\test_triage_firestore_operations.py tests\test_triage_put_firestore.py tests\test_triage_lock_coordinator.py tests\test_patient_registry_client.py tests\test_observability_middleware.py tests\contracts\test_event_schemas.py -q`
+- `terraform fmt -check -recursive infra\terraform`
+- `k6 run k6\contention.js` and `k6 run k6\sustained-multi-pool.js` only against a disposable local target after installing k6; not yet run.
+
+### Next three local actions
+
+1. Finish image build and validate generated Patient Registry image/runtime contract; resolve missing local Python dependency when package access is available.
+2. Resume outbox migration only after confirming the durable per-pool/per-destination sequence source and legacy-row handling; then test claims, lease expiry, stale ACKs, retry/backoff, poison blocking, and independent streams against disposable PostgreSQL and local brokers/emulators.
+3. Re-run CI-equivalent checks and k6 on disposable targets, then commit reviewed functionality slices. No push or cloud work without separate approval.
 
 ## Latest Local Milestone (2026-10-29)
 
