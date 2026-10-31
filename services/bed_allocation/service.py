@@ -347,6 +347,9 @@ class BedAllocationDomainService:
             # before any downstream mutation. A unique scoped claim makes a
             # concurrent matching retry observe this same allocation.
             allocation_id = f"alloc-{uuid.uuid4().hex[:10]}"
+            # The accepting request owns the workflow from the insert onward, so the
+            # recovery worker cannot start a second concurrent run of a healthy request.
+            claim_owner = f"{self.owner_id}:request:{uuid.uuid4().hex}"
             alloc_record = AllocationModel(
                 allocation_id=allocation_id,
                 admission_id=req.admission_id,
@@ -354,6 +357,8 @@ class BedAllocationDomainService:
                 status="PROCESSING",
                 pending_action="CHECK_PRIORITY",
                 workflow_data=json.dumps({"patient_id": adm.patient_id}),
+                recovery_claim_owner=claim_owner,
+                recovery_claim_until=datetime.now(timezone.utc) + timedelta(seconds=60),
             )
             try:
                 if idempotency_key:
@@ -399,6 +404,7 @@ class BedAllocationDomainService:
             idempotency_key=idempotency_key,
             request_payload=req.model_dump(),
             started_at=start_time,
+            claim_owner=claim_owner,
         )
 
     def _read_operation(self, operation_id: str) -> Optional[dict]:
@@ -418,13 +424,20 @@ class BedAllocationDomainService:
 
     def _run_create_workflow(
         self, allocation_id: str, request_id: str, idempotency_key: Optional[str],
-        request_payload: dict, started_at: Optional[float] = None,
+        request_payload: dict, started_at: Optional[float] = None, claim_owner: Optional[str] = None,
     ) -> AllocationResponse:
         started_at = started_at or time.perf_counter()
         with self.session_factory() as session:
-            record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
+            record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).with_for_update().first()
             if record is None:
                 raise AppException("NOT_FOUND", "Accepted allocation no longer exists", status.HTTP_404_NOT_FOUND)
+            claim_until = record.recovery_claim_until
+            if claim_until is not None and claim_until.tzinfo is None:
+                claim_until = claim_until.replace(tzinfo=timezone.utc)
+            if record.recovery_claim_owner != claim_owner or claim_until is None or claim_until <= datetime.now(timezone.utc):
+                # Another request or recovery worker owns this workflow (or our claim lapsed).
+                session.rollback()
+                return self._allocation_snapshot(allocation_id)
             req = CreateAllocationRequest(admission_id=record.admission_id, pool_id=record.pool_id)
             workflow = json.loads(record.workflow_data or "{}")
             action = record.pending_action or "FINALIZE_CREATE"
@@ -453,6 +466,16 @@ class BedAllocationDomainService:
             final_status: Optional[str] = None
             bed_operation_id = f"{allocation_id}:reserve-bed"
             staff_operation_id = f"{allocation_id}:assign-staff"
+
+            if action == "RELEASE_POOL_LOCK":
+                # Only the earlier lock release was unconfirmed (that lease expires on its own).
+                # Resume from the last durable outcome under this fresh lease.
+                staff_done = self._read_operation(staff_operation_id)
+                enqueued = self._read_operation(f"{allocation_id}:enqueue-waitlist")
+                if staff_done and staff_done["status"] == "SUCCEEDED":
+                    action = "ASSIGN_STAFF"
+                elif enqueued and enqueued["status"] == "SUCCEEDED":
+                    action = "ENQUEUE_WAITLIST"
 
             if action == "CHECK_PRIORITY":
                 action = "CHECK_PRIORITY"
@@ -728,7 +751,7 @@ class BedAllocationDomainService:
                     payload = {"reason": data.get("reason", "recovery")}
             try:
                 if action == "CREATE":
-                    self._run_create_workflow(allocation_id, request_id, key, payload)
+                    self._run_create_workflow(allocation_id, request_id, key, payload, claim_owner=worker_id)
                 elif action == "RELEASE" and pending_action == "PROMOTE":
                     self._resume_promotion(allocation_id, request_id)
                 elif action == "RELEASE":
