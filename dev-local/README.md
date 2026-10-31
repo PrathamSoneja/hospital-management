@@ -73,6 +73,23 @@ document storage. It does not contact Cloud Storage.
 - No Compose override existed in the current checkout; the existing root Compose
   file remains the local dependency stack, including real PostgreSQL and optional
   Firestore/Pub/Sub emulators.
-- `.env.production.example` documents GCP runtime keys without credentials or
+- `.env.gcp.example` documents GCP runtime keys without credentials or
   emulator settings. Terraform outputs are configuration outputs only; no
   Terraform apply or deployed resource state is confirmed in this workspace.
+
+## Local k6 load targets (MOCK-TESTED evidence only)
+
+`dev-local/load_target.py` (ignored, machine-local) starts real Allocation code on a disposable
+migrated database with explicit stateful doubles from `tests/support/` (exclusive Lock Coordinator,
+Bed/Staff/Patient, in-process Triage), and real Triage code on the Firestore emulator with the gRPC
+lock double. Use a fresh `*_test` database per contention run.
+
+```powershell
+$env:ENVIRONMENT='local'; $env:DATABASE_URL='<disposable *_test URL>'; .venv\Scripts\python.exe dev-local\load_target.py allocation
+$env:ENVIRONMENT='local'; $env:FIRESTORE_EMULATOR_HOST='localhost:8080'; .venv\Scripts\python.exe dev-local\load_target.py triage
+.\scripts\local\Invoke-LocalLoad.ps1 -Scenario contention
+.\scripts\local\Invoke-LocalLoad.ps1 -Scenario sustained -Duration 2m
+```
+
+Full local verification: `.\scripts\local\Start-LocalStack.ps1` then `.\scripts\local\Invoke-LocalTests.ps1`
+(reads the ignored `.env.local`; created from `.env.local.example`).

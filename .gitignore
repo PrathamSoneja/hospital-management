@@ -89,3 +89,4 @@ docs/*.md
 tfplan.bin
 tfplan.txt
 /evidence/
+!docs/gcp-integration-runbook.md

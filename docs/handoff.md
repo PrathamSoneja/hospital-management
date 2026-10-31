@@ -2,9 +2,34 @@
 
 Updated: 2026-10-31
 
-## Outbox Milestone (2026-10-31, latest)
+## Local Completion Milestone (2026-10-31, latest)
 
-This section supersedes every older statement below, including "Current Workspace Update".
+Supersedes every older statement below where they conflict. Branch `feature/outbox-delivery`, local only, not pushed.
+Commits after `6ea9f85`: `7c20453` nullable-ward notifications, `5d896cd` cloud-profile config validation,
+`7ea4653` 50-way PostgreSQL contention test + exclusive lock double, `fcbac79` CI services/strict skips,
+`4610398` Allocation claim-race fix, `3801634` k6 scripts, `05dc2c4` readiness/secret files/non-root,
+`6c25142` + `c4f6b1c` GKE/ArgoCD manifests, `6a88e60` scripts; this handoff/runbook commit follows.
+
+- **LOCAL-VERIFIED (bug fixed):** the local k6 contention run exposed a real Allocation defect: an accepted create row had no recovery claim, so the recovery worker could start a second run sharing the request's Coordinator lease; one lock release then failed and the row looped forever in `RELEASE_POOL_LOCK` (66 attempts observed). Fixed by claiming at insert, claim-owner checks at workflow start, and resuming `RELEASE_POOL_LOCK` from durable outcomes. Regression tests fail on the old code and pass now.
+- **LOCAL-VERIFIED:** `REQUIRE_INTEGRATION=1` full suite with disposable PostgreSQL (`hospital_allocation_pratham_test`) + Firestore emulator: **115 passed, 0 skipped** (Patient Registry tests included now that packages installed). Without `TEST_POSTGRES_URL` the run aborts instead of skipping.
+- **LOCAL-VERIFIED:** OpenAPI (3 specs) valid; proto regenerates without diff; migration empty-bootstrap/upgrade/downgrade verified earlier and `alembic check` clean; Allocation image runs as uid 10001 and smoke passes (`healthz=200 readyz=200 missing_allocation=404`); Triage and Patient images build; promtool: 3 rules valid; `kubectl kustomize` renders; kubeconform strict (K8s 1.30): 16 valid, 2 CRDs skipped.
+- **MOCK-TESTED (k6, grafana/k6:0.54.0 container):** contention 50 distinct admissions / 10 beds → settled `ALLOCATED=10 WAITLISTED=40 distinct_beds=10`, 0 violations. Sustained 3 pools, 20 VUs, 2.5 min: 12,400 requests, 0 failed, p95 884 ms; afterwards 0 duplicate active beds, every outbox stream gap-free, no pending actions. Lock/Bed/Staff/Patient were stateful doubles; Allocation used in-process Triage. Not distributed or HPA evidence.
+- **LOCAL-VERIFIED (observability):** HTTP metric labels are route templates; 0 label values contain IDs after load; request ID echoed and present in structured JSON logs (`severity`, `request_id`).
+- **GENERATED-UNDEPLOYED:** `k8s/base`, `k8s/overlays/staging` (placeholders only, digest-pinned images), migration Job (manual ArgoCD sync, separate schema-owner credential), ArgoCD Applications ignoring `/spec/replicas`, optional Managed Prometheus component, PowerShell cloud scripts (guarded, **UNEXECUTED**), `docs/gcp-integration-runbook.md`.
+- **BLOCKED / teammate:** Terraform provisions Confluent Cloud Kafka (conflicts with Kafka-on-GKE); no Allocation DB users; Allocation GSA lacks Pub/Sub publisher + Secret Manager accessor; Secret Manager CSI, network-policy enforcement, Managed Prometheus not enabled; no Pub/Sub/Eventarc/Cloud Run, Kafka topic, or teammate endpoints; `stream_sequence` + nullable `ward` contract acceptance pending (Nisarg, Jay). Details and owners: runbook section 0.
+- **Pending decision (unchanged):** staged deletion of `.env.example` (replaced by `.env.gcp.example`/`.env.local.example`); `infra/terraform/outputs.tf` edit left uncommitted for Ruchir.
+
+### Required environment values (all still unset)
+
+Project ID, region, AR repository, namespace, name prefix, Cloud SQL connection name, the four Secret Manager secrets, Lock/Bed/Staff/Patient endpoints, Pub/Sub topic, Kafka bootstrap/topic/protocol/mechanism/CA, ArgoCD project and repo URL/branch, billing account/budget. Source table: runbook "Variable sources".
+
+### Next three cloud actions (each needs explicit approval)
+
+1. Ruchir: resolve the Kafka/Confluent conflict, add Allocation DB users, GSA roles, Secret Manager secrets, and cluster add-ons; produce a reviewed Terraform plan (`Invoke-TerraformPlan.ps1`).
+2. Pratham: push digest-pinned images (`Push-Images.ps1`), fill the overlay, run the approved `20261031_03` migration via the manual ArgoCD Application.
+3. With teammate endpoints live: staging event/recovery tests and HPA load evidence (`Invoke-PostDeployChecks.ps1 -WatchHpa`).
+
+## Outbox Milestone (2026-10-31)
 
 - **Branch:** local `feature/outbox-delivery` (committing on `master` was blocked by review). Local commits: `0bc54ac` runtime/test-support split, `388bdbe` outbox sequencing+claims, `29426b6` broker adapters+worker, `d2fee50` observability labels/queries, `7a23330` Patient admission contract, `3717df0` k6+CI (unrun). Not pushed.
 - **LOCAL-VERIFIED (outbox core):** migration `20261031_03` adds `outbox_stream_counters(destination, pool_id)`, `pool_id`, `stream_sequence`, `attempt_count`, `available_at`, claim owner/token/expiry, bounded `last_error`, and unique `(destination, pool_id, stream_sequence)`. Sequences come from the counter row incremented inside the business transaction (rollback consumes none; counters taken in fixed kafka→pubsub order). Workers claim only the head of each stream with `FOR UPDATE SKIP LOCKED`, commit, publish outside any transaction, then ACK/retry only if the claim token still matches. Backoff is exponential and capped. `POISONED` blocks only its stream. Operator actions: `retry_poisoned(event_id)` and `resolve(event_id, note)` (sets `RESOLVED`, row kept for audit).
