@@ -13,6 +13,8 @@ from services.bed_allocation.clients.grpc_clients import (
     GrpcTriageClient, HttpPatientRegistryClient
 )
 from services.bed_allocation.db import get_engine
+from services.bed_allocation.outbox.dispatcher import OutboxDispatcher, OutboxWorker
+from services.bed_allocation.outbox.publishers import build_event_publisher_from_env
 from services.bed_allocation.rest import router as allocation_router, set_service
 from services.bed_allocation.service import BedAllocationDomainService
 from shared.observability.errors import register_error_handlers
@@ -28,7 +30,7 @@ def _required_setting(name: str) -> str:
     return value
 
 
-def build_app(database_url: str = None, clients: dict | None = None) -> FastAPI:
+def build_app(database_url: str = None, clients: dict | None = None, event_publisher=None) -> FastAPI:
     engine = get_engine(database_url)
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     if clients is None:
@@ -60,6 +62,19 @@ def build_app(database_url: str = None, clients: dict | None = None) -> FastAPI:
     )
     set_service(domain_service)
 
+    outbox_worker = None
+    if os.environ.get("ENABLE_OUTBOX_WORKER", "false").lower() == "true":
+        # Fail at startup on missing broker configuration; never publish to an in-memory stand-in.
+        publisher = event_publisher if event_publisher is not None else build_event_publisher_from_env()
+        dispatcher = OutboxDispatcher(
+            session_factory, publisher,
+            owner_id=f"{os.environ.get('POD_NAME', 'bed-alloc-instance-1')}:outbox",
+            claim_seconds=int(os.environ.get("OUTBOX_CLAIM_SECONDS", "30")),
+            max_attempts=int(os.environ.get("OUTBOX_MAX_ATTEMPTS", "12")),
+            max_backoff_seconds=int(os.environ.get("OUTBOX_MAX_BACKOFF_SECONDS", "300")),
+        )
+        outbox_worker = OutboxWorker(dispatcher, poll_seconds=float(os.environ.get("OUTBOX_POLL_SECONDS", "1")))
+
     @asynccontextmanager
     async def lifespan(app):
         enabled = os.environ.get("ENABLE_RECOVERY_WORKER", "false").lower() == "true"
@@ -76,10 +91,15 @@ def build_app(database_url: str = None, clients: dict | None = None) -> FastAPI:
         if enabled:
             worker = threading.Thread(target=recovery_loop, name="allocation-recovery", daemon=True)
             worker.start()
+        if outbox_worker is not None:
+            outbox_worker.start()
         try:
             yield
         finally:
             stop_event.set()
+            if outbox_worker is not None and not outbox_worker.stop(timeout=15):
+                # Unfinished claims expire and are reclaimed by another replica.
+                logger.warning("Outbox worker did not stop before the shutdown deadline")
             if worker is not None:
                 worker.join(timeout=5)
 
