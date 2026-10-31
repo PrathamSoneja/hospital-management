@@ -3,6 +3,60 @@ variable "project_id" {
   type        = string
 }
 
+variable "github_owner" {
+  description = "GitHub organization or account that owns the repository used by GitHub Actions."
+  type        = string
+}
+
+variable "github_repository" {
+  description = "Repository name (without owner) permitted to federate through GitHub Actions."
+  type        = string
+}
+
+variable "github_branch" {
+  description = "Only this branch may request a GitHub Actions cloud identity."
+  type        = string
+  default     = "main"
+}
+
+variable "kubernetes_namespace" {
+  description = "Namespace used by the app-of-apps service workloads and their Kubernetes service accounts."
+  type        = string
+  default     = "default"
+}
+
+variable "confluent_cloud_api_key" {
+  description = "Confluent Cloud API key. Prefer CONFLUENT_CLOUD_API_KEY environment injection."
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
+variable "confluent_cloud_api_secret" {
+  description = "Confluent Cloud API secret. Prefer CONFLUENT_CLOUD_API_SECRET environment injection."
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
+variable "confluent_environment_name" {
+  description = "Confluent Cloud environment name."
+  type        = string
+  default     = "hospital-management"
+}
+
+variable "confluent_cluster_name" {
+  description = "Confluent Cloud Kafka cluster name."
+  type        = string
+  default     = "hospital-events"
+}
+
+variable "confluent_region" {
+  description = "Confluent Cloud GCP region for the Kafka cluster."
+  type        = string
+  default     = "us-central1"
+}
+
 variable "region" {
   description = "GCP region for regional resources and the zonal GKE cluster."
   type        = string
@@ -121,8 +175,8 @@ variable "min_node_count" {
   default     = 2
 
   validation {
-    condition     = var.min_node_count >= 2 && var.min_node_count <= var.max_node_count
-    error_message = "min_node_count must be at least 2 and no greater than max_node_count."
+    condition     = var.min_node_count >= 2 && var.min_node_count <= 4
+    error_message = "min_node_count must be between 2 and 4."
   }
 }
 
@@ -132,8 +186,8 @@ variable "max_node_count" {
   default     = 4
 
   validation {
-    condition     = var.max_node_count <= 4 && var.max_node_count >= var.min_node_count
-    error_message = "max_node_count must be between min_node_count and 4."
+    condition     = var.max_node_count >= 2 && var.max_node_count <= 4
+    error_message = "max_node_count must be between 2 and 4."
   }
 }
 
@@ -151,6 +205,17 @@ variable "db_admin_password" {
   validation {
     condition     = length(var.db_admin_password) >= 16
     error_message = "db_admin_password must be at least 16 characters."
+  }
+}
+
+variable "patient_registry_db_password" {
+  description = "Password for the least-privilege Patient Registry PostgreSQL login. Supply through TF_VAR_patient_registry_db_password or secret injection; never commit it."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = length(var.patient_registry_db_password) >= 16
+    error_message = "patient_registry_db_password must be at least 16 characters."
   }
 }
 

@@ -1,0 +1,1 @@
+"""Patient Registry service package."""

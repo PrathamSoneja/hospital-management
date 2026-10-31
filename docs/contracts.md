@@ -18,6 +18,21 @@ This document specifies the interface contracts, communication protocols, tracin
 
 All network addresses must be configured via environment variables. Hostnames must never be hardcoded.
 
+### Patient Registry REST
+
+The Patient Registry owns the `patients` Cloud SQL database and stores uploaded file bytes in the private patient-documents Cloud Storage bucket. Its initial endpoints are:
+
+| Method and path | Purpose |
+|---|---|
+| `POST /api/v1/patients` | Create a patient; requires `Idempotency-Key` |
+| `GET /api/v1/patients/{patient_id}` | Retrieve a patient |
+| `POST /api/v1/admissions` | Create an `OPEN` admission for an existing patient; requires `Idempotency-Key` |
+| `GET /api/v1/admissions/{admission_id}` | Retrieve an admission; returns `admission_id`, `patient_id`, and `status` |
+| `POST /api/v1/patients/{patient_id}/documents` | Upload a `REFERRAL_LETTER` or `ID_SCAN` as multipart data; requires `Idempotency-Key` |
+| `GET /api/v1/patients/{patient_id}/documents/{document_id}` | Retrieve a private patient document |
+
+Document uploads accept PDF, JPEG, and PNG up to 10 MiB. The service does not log patient details or original filenames.
+
 ---
 
 ## 2. Shared Request Headers & Context

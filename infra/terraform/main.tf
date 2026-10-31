@@ -5,10 +5,12 @@ locals {
     "container.googleapis.com",
     "firestore.googleapis.com",
     "iam.googleapis.com",
+    "iamcredentials.googleapis.com",
     "logging.googleapis.com",
     "monitoring.googleapis.com",
     "servicenetworking.googleapis.com",
     "sqladmin.googleapis.com",
+    "sts.googleapis.com",
     "storage.googleapis.com",
   ])
 }
@@ -70,6 +72,7 @@ module "cloudsql" {
   private_services_range_name = module.network.private_services_range_name
   database_tier               = var.database_tier
   admin_password              = var.db_admin_password
+  patient_registry_password   = var.patient_registry_db_password
   deletion_protection         = var.deletion_protection
 
   depends_on = [
@@ -108,4 +111,34 @@ module "registry" {
   location        = var.region
 
   depends_on = [google_project_service.required]
+}
+
+module "iam" {
+  source = "./modules/iam"
+
+  project_id                   = var.project_id
+  name_prefix                  = var.name_prefix
+  github_owner                 = var.github_owner
+  github_repository            = var.github_repository
+  github_branch                = var.github_branch
+  kubernetes_namespace         = var.kubernetes_namespace
+  workload_identity_pool       = module.gke.workload_identity_pool
+  artifact_registry_repository = module.registry.repository_id
+  patient_documents_bucket     = module.storage.patient_documents_bucket
+  flink_bucket                 = module.storage.flink_bucket
+
+  depends_on = [
+    google_project_service.required,
+    module.gke,
+  ]
+}
+
+module "confluent" {
+  source = "./modules/confluent"
+
+  name_prefix         = var.name_prefix
+  environment_name    = var.confluent_environment_name
+  kafka_cluster_name  = var.confluent_cluster_name
+  region              = var.confluent_region
+  deletion_protection = var.deletion_protection
 }

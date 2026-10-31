@@ -121,6 +121,13 @@ resource "google_container_node_pool" "primary" {
     labels = var.resource_labels
   }
 
+  lifecycle {
+    precondition {
+      condition     = var.min_node_count <= var.max_node_count
+      error_message = "The minimum GKE node count cannot exceed the maximum node count."
+    }
+  }
+
   depends_on = [
     google_container_cluster.main,
     google_project_iam_member.node_roles,
