@@ -7,6 +7,7 @@ import threading
 import uvicorn
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
+from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 from services.bed_allocation.clients.grpc_clients import (
     GrpcBedRegistryClient, GrpcLockCoordinatorClient, GrpcStaffSchedulerClient,
@@ -119,8 +120,19 @@ def build_app(database_url: str = None, clients: dict | None = None, event_publi
         lifespan=lifespan,
     )
 
+    def ready_check() -> bool:
+        # Storage-aware and bounded: one trivial query under a short statement timeout.
+        try:
+            with engine.connect() as connection:
+                if engine.dialect.name == "postgresql":
+                    connection.execute(text("SET statement_timeout = 1000"))
+                connection.execute(text("SELECT 1"))
+            return True
+        except Exception:
+            return False
+
     register_error_handlers(app, "bed-allocation-service")
-    setup_observability_middleware(app, "bed-allocation-service")
+    setup_observability_middleware(app, "bed-allocation-service", ready_check=ready_check)
     app.include_router(allocation_router)
     return app
 

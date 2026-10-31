@@ -60,3 +60,28 @@ def test_allocation_rejects_injected_adapters_in_cloud_profile(monkeypatch):
     with pytest.raises(ConfigError, match="Injected"):
         build_app("postgresql+psycopg2://app@127.0.0.1:5432/allocations",
                   clients={k: object() for k in ("lock", "bed", "staff", "triage", "patient")})
+
+
+def test_secret_setting_prefers_mounted_file(tmp_path):
+    from shared.config.runtime import secret_setting
+    secret = tmp_path / "database-url"
+    secret.write_text("postgresql+psycopg2://app@127.0.0.1:5432/db\n", encoding="utf-8")
+    assert secret_setting("DATABASE_URL", {"DATABASE_URL_FILE": str(secret), "DATABASE_URL": "ignored"}).endswith("/db")
+    assert secret_setting("DATABASE_URL", {"DATABASE_URL": "direct"}) == "direct"
+    with pytest.raises(ConfigError, match="DATABASE_URL_FILE") as error:
+        secret_setting("DATABASE_URL", {"DATABASE_URL_FILE": str(tmp_path / "missing")})
+    assert "missing" not in str(error.value)
+
+
+def test_allocation_readiness_reports_unreachable_database(monkeypatch):
+    from fastapi.testclient import TestClient
+    from services.bed_allocation.main import build_app
+    monkeypatch.setenv("ENVIRONMENT", "local")
+    monkeypatch.setenv("ENABLE_OUTBOX_WORKER", "false")
+    monkeypatch.setenv("ENABLE_RECOVERY_WORKER", "false")
+    # Nothing listens on port 1; the probe must fail fast with 503, while liveness stays 200.
+    app = build_app("postgresql+psycopg2://nobody@127.0.0.1:1/none",
+                    clients={k: object() for k in ("lock", "bed", "staff", "triage", "patient")})
+    with TestClient(app) as client:
+        assert client.get("/healthz").status_code == 200
+        assert client.get("/readyz").status_code == 503

@@ -67,6 +67,19 @@ def validate_cloud_runtime(endpoint_names, env=None) -> str:
     return profile
 
 
+def secret_setting(name: str, env=None) -> str:
+    """Read NAME from NAME_FILE (a Secret Manager CSI mount) if set, else from NAME."""
+    env = os.environ if env is None else env
+    path = env.get(f"{name}_FILE", "").strip()
+    if path:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                return handle.read().strip()
+        except OSError as error:
+            raise ConfigError(f"{name}_FILE is set but the mounted secret cannot be read") from error
+    return env.get(name, "").strip()
+
+
 def bounded_int(name: str, default: int, minimum: int, maximum: int, env=None) -> int:
     env = os.environ if env is None else env
     raw = env.get(name, "").strip()

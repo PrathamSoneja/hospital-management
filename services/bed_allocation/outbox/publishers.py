@@ -10,6 +10,8 @@ no fallback to an in-memory publisher.
 import os
 import threading
 
+from shared.config.runtime import secret_setting
+
 from services.bed_allocation.outbox.dispatcher import EventPublisher
 
 
@@ -119,8 +121,11 @@ def kafka_config_from_env(env=None) -> dict:
               "security.protocol": env.get("KAFKA_SECURITY_PROTOCOL", "SASL_SSL").strip()}
     if config["security.protocol"].startswith("SASL"):
         config["sasl.mechanism"] = _required(env, "KAFKA_SASL_MECHANISM")
-        config["sasl.username"] = _required(env, "KAFKA_SASL_USERNAME")
-        config["sasl.password"] = _required(env, "KAFKA_SASL_PASSWORD")
+        for option, name in (("sasl.username", "KAFKA_SASL_USERNAME"), ("sasl.password", "KAFKA_SASL_PASSWORD")):
+            value = secret_setting(name, env)
+            if not value:
+                raise PublisherConfigError(f"{name} (or {name}_FILE) must be configured for the outbox worker")
+            config[option] = value
     if env.get("KAFKA_SSL_CA_LOCATION", "").strip():
         config["ssl.ca.location"] = env["KAFKA_SSL_CA_LOCATION"].strip()
     return config

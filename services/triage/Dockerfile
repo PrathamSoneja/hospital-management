@@ -25,6 +25,10 @@ ENV TRIAGE_REST_PORT=8000
 ENV TRIAGE_GRPC_PORT=50051
 ENV START_GRPC=true
 
+# Run as an unprivileged user; matches runAsNonRoot/runAsUser in k8s manifests.
+RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin app
+USER 10001
+
 EXPOSE 8000 50051
 
 CMD ["python", "-m", "services.triage.main"]

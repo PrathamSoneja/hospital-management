@@ -4,7 +4,7 @@ Smoke-check a built Allocation image against a disposable, already-migrated data
     python scripts/smoke_image.py <image> [--database-url URL] [--port 18002]
 
 Starts the container in the local profile with deliberately unreachable teammate
-endpoints (gRPC channels connect lazily), checks /healthz and a DB-backed 404,
+endpoints (gRPC channels connect lazily), checks /healthz, storage-aware /readyz, and a DB-backed 404,
 then removes only the container it started. It never contacts cloud services.
 """
 import argparse
@@ -74,9 +74,10 @@ def main() -> int:
             except OSError:
                 pass
             time.sleep(1)
+        ready = _get(f"{base}/readyz")
         missing = _get(f"{base}/api/v1/allocations/smoke-missing-allocation")
-        print(f"healthz={health} missing_allocation={missing}")
-        return 0 if health == 200 and missing == 404 else 1
+        print(f"healthz={health} readyz={ready} missing_allocation={missing}")
+        return 0 if health == 200 and ready == 200 and missing == 404 else 1
     finally:
         subprocess.run(["docker", "rm", "-f", name], check=False, stdout=subprocess.DEVNULL)
 
