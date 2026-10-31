@@ -16,9 +16,9 @@ images:
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
 configMapGenerator:
   - name: allocation-config
-    envs: [allocation.env]
+    envs: [allocation.properties]
   - name: triage-config
-    envs: [triage.env]
+    envs: [triage.properties]
 patches:
   - target: {kind: ServiceAccount, name: bed-allocation-sa}
     patch: |-
