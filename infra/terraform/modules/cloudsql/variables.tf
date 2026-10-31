@@ -27,6 +27,11 @@ variable "admin_password" {
   sensitive = true
 }
 
+variable "patient_registry_password" {
+  type      = string
+  sensitive = true
+}
+
 variable "deletion_protection" {
   type = bool
 }

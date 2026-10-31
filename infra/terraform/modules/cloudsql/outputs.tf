@@ -9,3 +9,7 @@ output "connection_name" {
 output "database_names" {
   value = [for database in google_sql_database.service_databases : database.name]
 }
+
+output "patient_registry_username" {
+  value = google_sql_user.patient_registry.name
+}

@@ -50,6 +50,13 @@ resource "google_sql_user" "postgres_admin" {
   password = var.admin_password
 }
 
+resource "google_sql_user" "patient_registry" {
+  project  = var.project_id
+  name     = "patient_registry"
+  instance = google_sql_database_instance.main.name
+  password = var.patient_registry_password
+}
+
 resource "google_sql_database" "service_databases" {
   for_each = toset(["patients", "beds", "allocations"])
 
