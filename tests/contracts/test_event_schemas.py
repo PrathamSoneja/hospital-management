@@ -29,6 +29,7 @@ def test_valid_notification_events(notification_schema):
     valid_allocated = {
         "schema_version": "1.0.0",
         "event_id": "550e8400-e29b-41d4-a716-446655440000",
+        "stream_sequence": 1,
         "event_type": "BED_ALLOCATED",
         "occurred_at": "2026-10-28T12:00:00Z",
         "request_id": "req-001",
@@ -43,6 +44,7 @@ def test_valid_notification_events(notification_schema):
     valid_waitlisted = {
         "schema_version": "1.0.0",
         "event_id": "550e8400-e29b-41d4-a716-446655440001",
+        "stream_sequence": 2,
         "event_type": "ALLOCATION_WAITLISTED",
         "occurred_at": "2026-10-28T12:05:00Z",
         "request_id": "req-002",
@@ -59,6 +61,7 @@ def test_invalid_notification_event_rejected(notification_schema):
     invalid_event = {
         "schema_version": "1.0.0",
         "event_id": "550e8400-e29b-41d4-a716-446655440000",
+        "stream_sequence": 1,
         "event_type": "UNKNOWN_ACTION",
         "occurred_at": "2026-10-28T12:00:00Z",
         "request_id": "req-001",
@@ -74,6 +77,7 @@ def test_valid_bed_event_stream(bed_event_schema):
     valid_bed_event = {
         "schema_version": "1.0.0",
         "event_id": "evt-001",
+        "stream_sequence": 1,
         "event_type": "BED_ALLOCATED",
         "event_time": "2026-10-28T12:00:00Z",
         "request_id": "req-001",
@@ -88,6 +92,12 @@ def test_valid_bed_event_stream(bed_event_schema):
         "occupancy_delta": 1
     }
     validate(instance=valid_bed_event, schema=bed_event_schema)
+    for bad_sequence in (0, "1", None):
+        with pytest.raises(ValidationError):
+            validate(instance={**valid_bed_event, "stream_sequence": bad_sequence}, schema=bed_event_schema)
+    unsequenced = {k: v for k, v in valid_bed_event.items() if k != "stream_sequence"}
+    with pytest.raises(ValidationError):
+        validate(instance=unsequenced, schema=bed_event_schema)
 
 def test_valid_bed_stats_analytics_event(bed_stats_schema):
     valid_stats = {
