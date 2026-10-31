@@ -1,0 +1,43 @@
+name: Local CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    env:
+      GRAFANA_ADMIN_PASSWORD: local-ci-only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt openapi-spec-validator
+      - name: Validate contracts and generated protobufs
+        run: |
+          python -m openapi_spec_validator contracts/openapi/allocation.openapi.yaml
+          python -m openapi_spec_validator contracts/openapi/triage.openapi.yaml
+          python -m openapi_spec_validator contracts/openapi/patient-registry-admissions.openapi.yaml
+          python scripts/compile_proto.py
+          git diff --exit-code -- shared/generated
+      - name: Validate infrastructure and local Compose
+        run: |
+          terraform fmt -check -recursive infra/terraform
+          docker compose config --quiet
+      - name: Run tracked tests
+        run: python -m pytest -p no:cacheprovider -q
+      - name: Build in-scope service images
+        run: |
+          docker build -f services/bed_allocation/Dockerfile -t hospital-bed-allocation:ci .
+          docker build -f services/triage/Dockerfile -t hospital-triage:ci .
+          docker build -f services/patient_registry/Dockerfile -t hospital-patient-registry:ci .
