@@ -50,7 +50,10 @@ class ObservabilityASGIMiddleware:
             await self.app(scope, receive, send_wrapper)
         finally:
             duration = time.perf_counter() - start_time
-            endpoint = scope.get("path", "")
+            # Use the registered route template so admission/allocation IDs do
+            # not create an unbounded Prometheus label set.
+            route = scope.get("route")
+            endpoint = getattr(route, "path", "unmatched")
             method = scope.get("method", "GET")
             HTTP_REQUESTS_TOTAL.labels(
                 service=self.service_name,

@@ -53,14 +53,6 @@ ALLOCATION_PROCESSING_SECONDS = Histogram(
     buckets=[0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0]
 )
 
-# Waitlist Gauge
-# Global gauge documentation: updated by master/leader or per-pool scraper to prevent double counting
-WAITLIST_ENTRIES = Gauge(
-    "waitlist_entries",
-    "Current count of active waitlisted admissions per pool",
-    ["service", "pool_id"]
-)
-
 # Distributed Coordination Metrics
 LEASE_EXPIRATIONS_TOTAL = Counter(
     "lease_expirations_total",

@@ -11,7 +11,7 @@ groups:
           description: "p95 lock wait time is {{ $value }}s on pool {{ $labels.pool_id }}"
 
       - alert: OutboxDeliveryBacklogHigh
-        expr: sum(outbox_pending_events) by (destination) > 100
+        expr: max(outbox_pending_events) by (destination) > 100
         for: 1m
         labels:
           severity: critical
@@ -20,7 +20,7 @@ groups:
           description: "{{ $value }} pending events waiting in outbox table"
 
       - alert: StaleFencingTokenDetected
-        expr: sum(rate(stale_fencing_rejections_total[1m])) > 0
+        expr: sum by (pool_id) (rate(stale_fencing_rejections_total[1m])) > 0
         for: 0m
         labels:
           severity: warning
