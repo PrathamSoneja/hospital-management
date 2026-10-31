@@ -12,14 +12,11 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import jsonschema
 import pytest
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
 
-from services.bed_allocation.db import Base, OutboxEventModel, OutboxStreamCounterModel
+from services.bed_allocation.db import OutboxEventModel, OutboxStreamCounterModel
 from services.bed_allocation.models import CreateAllocationRequest
 from services.bed_allocation.outbox.dispatcher import OutboxDispatcher, OutboxWorker
 from services.bed_allocation.service import BedAllocationDomainService, _next_outbox_sequence
@@ -32,28 +29,6 @@ from tests.support.allocation_fakes import (
 from tests.support.triage_fakes import MockFencingValidator
 
 CONTRACTS = Path(__file__).resolve().parents[1] / "contracts" / "events"
-
-
-@pytest.fixture
-def pg_sessions():
-    database_url = os.environ.get("TEST_POSTGRES_URL")
-    if not database_url:
-        pytest.skip("Set TEST_POSTGRES_URL to an isolated local PostgreSQL database")
-    if urlsplit(database_url).hostname not in {"localhost", "127.0.0.1", "::1"}:
-        pytest.fail("TEST_POSTGRES_URL must point to local PostgreSQL; cloud databases are not permitted")
-    admin_engine = create_engine(database_url)
-    schema = f"test_outbox_{uuid.uuid4().hex}"
-    with admin_engine.begin() as connection:
-        connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-    engine = create_engine(database_url, connect_args={"options": f"-csearch_path={schema}"}, pool_size=12, max_overflow=4)
-    try:
-        Base.metadata.create_all(bind=engine)
-        yield sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    finally:
-        engine.dispose()
-        with admin_engine.begin() as connection:
-            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
-        admin_engine.dispose()
 
 
 class RecordingPublisher:
