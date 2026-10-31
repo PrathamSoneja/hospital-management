@@ -6,11 +6,9 @@ Dispatches pending events from PostgreSQL outbox table to:
 Tracks per-destination delivery status, retries with exponential backoff,
 and records Prometheus metrics.
 """
-import json
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from typing import List, Optional
 from sqlalchemy.orm import Session
 from services.bed_allocation.db import OutboxEventModel
 from shared.observability.metrics import OUTBOX_PENDING_EVENTS, OUTBOX_DELIVERY_TOTAL
@@ -25,25 +23,6 @@ class EventPublisher(ABC):
     @abstractmethod
     def publish_kafka(self, topic: str, key: str, payload_json: str) -> bool:
         pass
-
-class FakeEventPublisher(EventPublisher):
-    """In-memory collector for unit and integration testing."""
-    def __init__(self):
-        self.pubsub_messages: List[dict] = []
-        self.kafka_messages: List[dict] = []
-        self.simulate_failure = False
-
-    def publish_pubsub(self, topic: str, payload_json: str, attributes: dict) -> bool:
-        if self.simulate_failure:
-            return False
-        self.pubsub_messages.append({"topic": topic, "payload": json.loads(payload_json), "attributes": attributes})
-        return True
-
-    def publish_kafka(self, topic: str, key: str, payload_json: str) -> bool:
-        if self.simulate_failure:
-            return False
-        self.kafka_messages.append({"topic": topic, "key": key, "payload": json.loads(payload_json)})
-        return True
 
 class OutboxDispatcher:
     def __init__(self, session_factory, publisher: EventPublisher, service_name: str = "bed-allocation"):

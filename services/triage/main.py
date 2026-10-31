@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from services.triage.repository.memory import InMemoryTriageRepository
 from services.triage.repository.firestore import FirestoreTriageRepository
 from services.triage.service import TriageDomainService
-from services.triage.validation import MockFencingValidator, RemoteLockValidator
+from services.triage.validation import RemoteLockValidator
 from services.triage.lock_coordinator import GrpcLockCoordinatorClient
 from services.triage.rest import router as triage_router, set_service
 from services.triage.grpc_server import create_grpc_server
@@ -28,10 +28,8 @@ def build_app(backend: str | None = None, start_grpc: bool = False) -> FastAPI:
         raise ValueError(f"Unknown TRIAGE_STORAGE_BACKEND: {backend_mode}")
     if backend_mode == "memory" and environment != "test":
         raise ValueError("TRIAGE_STORAGE_BACKEND=memory is permitted only when ENVIRONMENT=test")
-    if fencing_mode not in {"coordinator", "fake"}:
-        raise ValueError(f"Unknown TRIAGE_FENCING_MODE: {fencing_mode}")
-    if fencing_mode == "fake" and environment != "test":
-        raise ValueError("TRIAGE_FENCING_MODE=fake is permitted only when ENVIRONMENT=test")
+    if fencing_mode != "coordinator":
+        raise ValueError(f"Unknown TRIAGE_FENCING_MODE: {fencing_mode}; only coordinator is supported")
 
     logger.info("triage_configuration_loaded", extra={
         "event": "triage_configuration_loaded", "backend": backend_mode,
@@ -39,13 +37,10 @@ def build_app(backend: str | None = None, start_grpc: bool = False) -> FastAPI:
     })
     repo = FirestoreTriageRepository() if backend_mode == "firestore" else InMemoryTriageRepository()
     lock_client = None
-    if fencing_mode == "fake":
-        validator = MockFencingValidator(accept_all=True)
-    else:
-        target = os.environ.get("LOCK_COORDINATOR_ADDR", "").strip()
-        if target:
-            lock_client = GrpcLockCoordinatorClient(target)
-        validator = RemoteLockValidator(lock_client.stub if lock_client else None)
+    target = os.environ.get("LOCK_COORDINATOR_ADDR", "").strip()
+    if target:
+        lock_client = GrpcLockCoordinatorClient(target)
+    validator = RemoteLockValidator(lock_client.stub if lock_client else None)
 
     domain_service = TriageDomainService(
         repo=repo,
@@ -57,9 +52,7 @@ def build_app(backend: str | None = None, start_grpc: bool = False) -> FastAPI:
 
     def ready_check():
         storage_ready = repo.check_ready(timeout_s=0.5) if hasattr(repo, "check_ready") else backend_mode == "memory"
-        coordinator_ready = lock_client.check_ready(timeout_s=0.5) if lock_client else (
-            fencing_mode == "fake" and environment == "test"
-        )
+        coordinator_ready = lock_client.check_ready(timeout_s=0.5) if lock_client else False
         return storage_ready and coordinator_ready
 
     @asynccontextmanager

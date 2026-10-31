@@ -8,69 +8,47 @@ import uvicorn
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from sqlalchemy.orm import sessionmaker
-from services.bed_allocation.clients.fakes import (
-    DirectTriageClient, FakeBedRegistryClient, FakeLockCoordinatorClient,
-    FakePatientRegistryClient, FakeStaffSchedulerClient
-)
 from services.bed_allocation.clients.grpc_clients import (
     GrpcBedRegistryClient, GrpcLockCoordinatorClient, GrpcStaffSchedulerClient,
     GrpcTriageClient, HttpPatientRegistryClient
 )
 from services.bed_allocation.db import get_engine
-from services.bed_allocation.outbox.dispatcher import FakeEventPublisher, OutboxDispatcher
 from services.bed_allocation.rest import router as allocation_router, set_service
 from services.bed_allocation.service import BedAllocationDomainService
-from services.triage.repository.memory import InMemoryTriageRepository
-from services.triage.service import TriageDomainService
-from services.triage.validation import MockFencingValidator
 from shared.observability.errors import register_error_handlers
 from shared.observability.logging import setup_logger
 from shared.observability.middleware import setup_observability_middleware
 
 logger = setup_logger("bed-allocation-service")
 
-def build_app(database_url: str = None, use_fakes: bool = True) -> FastAPI:
+def _required_setting(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise RuntimeError(f"{name} must be configured; no local fake fallback is available")
+    return value
+
+
+def build_app(database_url: str = None, clients: dict | None = None) -> FastAPI:
     engine = get_engine(database_url)
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-
-    use_fakes_env = os.environ.get("USE_FAKES", str(use_fakes)).lower() == "true"
-    logger.info(f"Initializing Bed Allocation Service. USE_FAKES={use_fakes_env}")
-
-    if use_fakes_env:
-        patient_client = FakePatientRegistryClient()
-        # Seed default test admissions
-        patient_client.seed_admission("adm-101", "pat-101", "OPEN")
-        patient_client.seed_admission("adm-102", "pat-102", "OPEN")
-        patient_client.seed_admission("adm-closed", "pat-closed", "DISCHARGED")
-
-        triage_repo = InMemoryTriageRepository()
-        triage_domain = TriageDomainService(triage_repo, MockFencingValidator(True))
-        triage_domain.set_triage("adm-101", 1, "WARDA-ICU")
-        triage_domain.set_triage("adm-102", 2, "WARDA-ICU")
-        triage_client = DirectTriageClient(triage_domain)
-
-        lock_client = FakeLockCoordinatorClient()
-        bed_client = FakeBedRegistryClient()
-        for i in range(1, 11):
-            bed_client.seed_bed(f"bed-icu-{i:02d}", "WARDA-ICU", "ICU-A")
-
-        staff_client = FakeStaffSchedulerClient(initial_capacity=50)
-        publisher = FakeEventPublisher()
+    if clients is None:
+        logger.info("Initializing Bed Allocation Service with real dependency adapters")
+        lock_client = GrpcLockCoordinatorClient(_required_setting("LOCK_SERVICE_ADDR"))
+        bed_client = GrpcBedRegistryClient(_required_setting("BED_SERVICE_ADDR"))
+        staff_client = GrpcStaffSchedulerClient(_required_setting("STAFF_SERVICE_ADDR"))
+        triage_client = GrpcTriageClient(_required_setting("TRIAGE_SERVICE_ADDR"))
+        patient_client = HttpPatientRegistryClient(_required_setting("PATIENT_SERVICE_URL"))
     else:
-        lock_addr = os.environ.get("LOCK_SERVICE_ADDR", "localhost:50051")
-        bed_addr = os.environ.get("BED_SERVICE_ADDR", "localhost:50053")
-        staff_addr = os.environ.get("STAFF_SERVICE_ADDR", "localhost:50054")
-        triage_addr = os.environ.get("TRIAGE_SERVICE_ADDR", "localhost:50052")
-        patient_url = os.environ.get("PATIENT_SERVICE_URL", "http://localhost:8000/api/v1")
-
-        lock_client = GrpcLockCoordinatorClient(lock_addr)
-        bed_client = GrpcBedRegistryClient(bed_addr)
-        staff_client = GrpcStaffSchedulerClient(staff_addr)
-        triage_client = GrpcTriageClient(triage_addr)
-        patient_client = HttpPatientRegistryClient(patient_url)
-        publisher = FakeEventPublisher() # Can be swapped with GCP Pub/Sub and Kafka producers
-
-    dispatcher = OutboxDispatcher(session_factory, publisher)
+        required_clients = {"lock", "bed", "staff", "triage", "patient"}
+        missing = sorted(required_clients - clients.keys())
+        if missing:
+            raise ValueError(f"Explicit client injection is missing: {', '.join(missing)}")
+        logger.warning("Allocation is using explicitly injected local/test adapters")
+        lock_client = clients["lock"]
+        bed_client = clients["bed"]
+        staff_client = clients["staff"]
+        triage_client = clients["triage"]
+        patient_client = clients["patient"]
     domain_service = BedAllocationDomainService(
         session_factory=session_factory,
         patient_client=patient_client,
@@ -116,9 +94,7 @@ def build_app(database_url: str = None, use_fakes: bool = True) -> FastAPI:
     app.include_router(allocation_router)
     return app
 
-app = build_app()
-
 if __name__ == "__main__":
     rest_port = int(os.environ.get("ALLOCATION_REST_PORT", 8002))
     host = os.environ.get("ALLOCATION_REST_HOST", "0.0.0.0")
-    uvicorn.run("services.bed_allocation.main:app", host=host, port=rest_port, reload=False)
+    uvicorn.run(build_app(), host=host, port=rest_port, reload=False)

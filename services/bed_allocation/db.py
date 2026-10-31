@@ -81,11 +81,12 @@ class OperationRecoveryModel(Base):
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
 def get_engine(database_url: str = None):
-    url = database_url or os.environ.get(
-        "DATABASE_URL",
-        "sqlite:///hospital_allocation.db"
-    )
+    url = database_url or os.environ.get("DATABASE_URL")
+    if not url:
+        raise RuntimeError("DATABASE_URL must be configured; SQLite is available only through explicit test engines")
     if url.startswith("sqlite"):
+        if os.environ.get("ENVIRONMENT", "production").lower() != "test":
+            raise RuntimeError("SQLite is test-only; use local Docker PostgreSQL or Cloud SQL")
         return create_engine(url, connect_args={"check_same_thread": False})
     return create_engine(url, pool_pre_ping=True, pool_size=10, max_overflow=20)
 

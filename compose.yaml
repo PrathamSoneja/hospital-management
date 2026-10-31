@@ -37,6 +37,7 @@ services:
   # Application Services (Pratham Soneja)
   # ============================================================================
   triage-service:
+    profiles: [application]
     build:
       context: .
       dockerfile: services/triage/Dockerfile
@@ -60,6 +61,7 @@ services:
       - firestore-emulator
 
   bed-allocation-service:
+    profiles: [application]
     build:
       context: .
       dockerfile: services/bed_allocation/Dockerfile
@@ -67,9 +69,8 @@ services:
     environment:
       ALLOCATION_REST_HOST: 0.0.0.0
       ALLOCATION_REST_PORT: 8000
-      DATABASE_URL: postgresql+psycopg2://postgres:postgrespassword@postgres:5432/hospital_allocation
+      DATABASE_URL: ${ALLOCATION_TEST_DATABASE_URL:-postgresql+psycopg2://postgres:postgrespassword@postgres:5432/hospital_allocation_demo_test}
       TRIAGE_SERVICE_ADDR: triage-service:50051
-      USE_FAKES: "true"
       PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
     ports:
       - "8002:8000"
@@ -87,6 +88,7 @@ services:
     container_name: hospital-prometheus
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./monitoring/rules/alerts.yml:/etc/prometheus/alerts.yml:ro
     ports:
       - "9090:9090"
 
@@ -94,11 +96,12 @@ services:
     image: grafana/grafana:10.3.3
     container_name: hospital-grafana
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in the ignored local .env file}
     ports:
       - "3000:3000"
     volumes:
       - ./monitoring/dashboards:/var/lib/grafana/dashboards
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
     depends_on:
       - prometheus
 

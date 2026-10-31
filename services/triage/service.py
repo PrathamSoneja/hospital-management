@@ -14,7 +14,7 @@ from services.triage.idempotency import build_put_claim
 from services.triage.validation import FencingValidator
 from shared.generated.common_pb2 import MutationContext
 from shared.observability.errors import AppException
-from shared.observability.metrics import WAITLIST_ENTRIES, STALE_FENCING_REJECTIONS_TOTAL
+from shared.observability.metrics import STALE_FENCING_REJECTIONS_TOTAL
 from starlette import status
 
 logger = logging.getLogger("triage-service")
@@ -171,9 +171,6 @@ class TriageDomainService:
         )
         enqueue_result = self.repo.enqueue_waitlist(context, entry)
         saved_entry, already_existed = enqueue_result.entry, enqueue_result.already_existed
-        if not already_existed and not enqueue_result.replayed:
-            WAITLIST_ENTRIES.labels(service="triage", pool_id=context.pool_id).inc()
-
         return saved_entry, already_existed
 
     def peek_next(self, pool_id: str) -> Optional[WaitlistEntry]:
@@ -188,8 +185,6 @@ class TriageDomainService:
                 status_code=status.HTTP_409_CONFLICT
             )
         removed = self.repo.remove_waitlist_entry(context, allocation_id, reason)
-        if removed.success and not removed.replayed:
-            WAITLIST_ENTRIES.labels(service="triage", pool_id=context.pool_id).dec()
         return removed.success
 
     def list_waitlist(

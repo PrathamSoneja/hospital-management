@@ -13,7 +13,7 @@ from services.triage.lock_coordinator import LockLease
 from services.triage.repository.firestore import FirestoreTriageRepository
 from services.triage.rest import router, set_service
 from services.triage.service import TriageDomainService
-from services.triage.validation import MockFencingValidator
+from tests.support.triage_fakes import MockFencingValidator
 from shared.generated.common_pb2 import MutationContext
 from shared.observability.errors import register_error_handlers
 from shared.observability.middleware import setup_observability_middleware

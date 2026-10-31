@@ -35,7 +35,9 @@ coverage.xml
 # Environment and secrets
 .env
 *.env
+.env.*
 !.env.example
+!.env.production.example
 *.pem
 *.key
 *.cert
@@ -74,6 +76,10 @@ Thumbs.db
 pgdata/
 zookeeper_data/
 kafka_data/
+
+# Local-only stubs, seeds, emulator helpers, and overrides (README remains tracked)
+dev-local/*
+!dev-local/README.md
 docs/audit.md
 docs/next-steps.md
 docs/*.md

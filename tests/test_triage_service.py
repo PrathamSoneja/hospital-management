@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from services.triage.models import SetTriageRequest, TriageRecord, WaitlistEntry
 from services.triage.repository.memory import InMemoryTriageRepository
 from services.triage.service import TriageDomainService
-from services.triage.validation import MockFencingValidator
+from tests.support.triage_fakes import MockFencingValidator
 from shared.generated.common_pb2 import MutationContext
 from shared.generated import triage_pb2
 from services.triage.grpc_server import TriageGrpcServicer
