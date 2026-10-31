@@ -33,6 +33,8 @@ The Patient Registry owns the `patients` Cloud SQL database and stores uploaded 
 
 Document uploads accept PDF, JPEG, and PNG up to 10 MiB. The service does not log patient details or original filenames.
 
+The Allocation dependency contract for `GET /api/v1/admissions/{admission_id}` is `admission_id`, `patient_id`, and `status`; all three are required and the returned admission ID must match the requested ID. Allocation does not synthesize patient identity or an `OPEN` status when the Registry response is incomplete. The focused contract is [`contracts/openapi/patient-registry-admissions.openapi.yaml`](../contracts/openapi/patient-registry-admissions.openapi.yaml).
+
 ---
 
 ## 2. Shared Request Headers & Context
