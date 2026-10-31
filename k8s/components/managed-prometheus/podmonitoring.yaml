@@ -1,0 +1,25 @@
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: bed-allocation
+spec:
+  selector:
+    matchLabels:
+      app: bed-allocation-service
+  endpoints:
+    - port: http-rest
+      path: /metrics
+      interval: 30s
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: triage
+spec:
+  selector:
+    matchLabels:
+      app: triage-service
+  endpoints:
+    - port: http-rest
+      path: /metrics
+      interval: 30s

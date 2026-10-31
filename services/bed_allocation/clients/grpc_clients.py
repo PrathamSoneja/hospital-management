@@ -221,10 +221,24 @@ class HttpPatientRegistryClient(PatientRegistryClient):
                 if resp.status_code != 200:
                     raise AppException("SERVICE_UNAVAILABLE", f"Patient Registry returned {resp.status_code}", status.HTTP_503_SERVICE_UNAVAILABLE, retryable=True)
                 data = resp.json()
+                if (
+                    not isinstance(data, dict)
+                    or data.get("admission_id") != admission_id
+                    or not isinstance(data.get("patient_id"), str)
+                    or not data["patient_id"].strip()
+                    or not isinstance(data.get("status"), str)
+                    or not data["status"].strip()
+                ):
+                    raise AppException(
+                        "UPSTREAM_CONTRACT_ERROR",
+                        "Patient Registry returned an invalid admission response",
+                        status.HTTP_503_SERVICE_UNAVAILABLE,
+                        retryable=True,
+                    )
                 return PatientAdmissionDto(
                     admission_id=data["admission_id"],
-                    patient_id=data.get("patient_id", f"pat-{admission_id}"),
-                    status=data.get("status", "OPEN")
+                    patient_id=data["patient_id"],
+                    status=data["status"],
                 )
         except httpx.RequestError as e:
             raise AppException("SERVICE_UNAVAILABLE", f"Patient Registry unreachable: {str(e)}", status.HTTP_503_SERVICE_UNAVAILABLE, retryable=True)

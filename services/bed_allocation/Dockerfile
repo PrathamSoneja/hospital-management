@@ -26,6 +26,10 @@ ENV PYTHONPATH=/app
 ENV ALLOCATION_REST_HOST=0.0.0.0
 ENV ALLOCATION_REST_PORT=8000
 
+# Run as an unprivileged user; matches runAsNonRoot/runAsUser in k8s manifests.
+RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin app
+USER 10001
+
 EXPOSE 8000
 
 CMD ["python", "-m", "services.bed_allocation.main"]

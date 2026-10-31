@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from fastapi import Response
-from services.bed_allocation.clients.fakes import (
+from tests.support.allocation_fakes import (
     DirectTriageClient, FakeBedRegistryClient, FakeLockCoordinatorClient,
     FakePatientRegistryClient, FakeStaffSchedulerClient
 )
@@ -24,7 +24,8 @@ from services.bed_allocation.db import AllocationModel, Base, IdempotencyModel, 
 from services.bed_allocation.models import (
     CancelRequest, CreateAllocationRequest, ReleaseRequest
 )
-from services.bed_allocation.outbox.dispatcher import FakeEventPublisher, OutboxDispatcher
+from services.bed_allocation.outbox.dispatcher import OutboxDispatcher
+from tests.support.event_publisher import FakeEventPublisher
 from services.bed_allocation.rest import (
     cancel_allocation_endpoint, create_allocation_endpoint,
     get_allocation_endpoint, release_allocation_endpoint, set_service
@@ -32,7 +33,7 @@ from services.bed_allocation.rest import (
 from services.bed_allocation.service import BedAllocationDomainService
 from services.triage.repository.memory import InMemoryTriageRepository
 from services.triage.service import TriageDomainService
-from services.triage.validation import MockFencingValidator
+from tests.support.triage_fakes import MockFencingValidator
 from shared.observability.errors import AppException
 
 class DummyRequestState:

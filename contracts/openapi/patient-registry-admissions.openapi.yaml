@@ -1,0 +1,134 @@
+openapi: 3.0.3
+info:
+  title: Patient Registry Admission Contract
+  version: 1.0.0
+  description: Admission endpoints consumed by Bed Allocation. Full patient/document endpoint behavior is documented in the Patient Registry README.
+servers:
+  - url: http://patient-registry:8000
+paths:
+  /api/v1/admissions:
+    post:
+      summary: Create an open admission for an existing patient
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdmissionCreate'
+      responses:
+        '201':
+          description: Created admission or matching idempotent replay
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Admission'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /api/v1/admissions/{admission_id}:
+    get:
+      summary: Get admission identity and current status
+      parameters:
+        - name: admission_id
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 64
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Admission found; all three identity/status fields are required by Allocation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Admission'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+components:
+  parameters:
+    RequestId:
+      name: X-Request-ID
+      in: header
+      required: false
+      schema:
+        type: string
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+  schemas:
+    AdmissionCreate:
+      type: object
+      required: [patient_id]
+      properties:
+        patient_id:
+          type: string
+          minLength: 1
+          maxLength: 64
+    Admission:
+      type: object
+      required: [admission_id, patient_id, status, admitted_at, discharged_at]
+      properties:
+        admission_id:
+          type: string
+        patient_id:
+          type: string
+        status:
+          type: string
+          enum: [OPEN, DISCHARGED, CANCELLED]
+        admitted_at:
+          type: string
+          format: date-time
+        discharged_at:
+          type: string
+          format: date-time
+          nullable: true
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id, retryable]
+          properties:
+            code: {type: string}
+            message: {type: string}
+            request_id: {type: string}
+            retryable: {type: boolean}
+  responses:
+    BadRequest:
+      description: Invalid admission request
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+    NotFound:
+      description: Admission or patient does not exist
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+    Conflict:
+      description: Idempotency key reused with a different request
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
+    Unavailable:
+      description: Required storage dependency unavailable
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}

@@ -7,6 +7,7 @@
   "required": [
     "schema_version",
     "event_id",
+    "stream_sequence",
     "event_type",
     "event_time",
     "request_id",
@@ -24,6 +25,10 @@
     },
     "event_id": {
       "type": "string"
+    },
+    "stream_sequence": {
+      "type": "integer",
+      "minimum": 1
     },
     "event_type": {
       "type": "string",

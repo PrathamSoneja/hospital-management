@@ -5,9 +5,13 @@ pydantic>=2.6.0
 httpx>=0.27.0
 
 # gRPC and Protobuf
-grpcio>=1.62.0
-grpcio-tools>=1.62.0
-protobuf>=4.25.0
+# grpcio-tools generates shared/generated (CI fails on drift; Dockerfiles regenerate), so it is
+# pinned to the version that produced the checked-in stubs; grpcio moves in lockstep because the
+# stubs require grpcio >= GRPC_GENERATED_VERSION. The stubs validate protobuf runtime >= 7.35.1.
+# Upgrade all three together and regenerate with scripts/compile_proto.py.
+grpcio==1.85.0
+grpcio-tools==1.85.0
+protobuf>=7.35.1,<8
 
 # Database and Storage
 sqlalchemy>=2.0.0
@@ -21,6 +25,8 @@ python-multipart>=0.0.9
 prometheus-client>=0.20.0
 jsonschema>=4.21.0
 python-dotenv>=1.0.0
+google-cloud-pubsub>=2.21.0
+confluent-kafka>=2.3.0
 
 # Testing
 pytest>=8.0.0

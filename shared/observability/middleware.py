@@ -9,6 +9,7 @@ import uuid
 from typing import Callable
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import PlainTextResponse
+from starlette.concurrency import run_in_threadpool
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from shared.observability.metrics import HTTP_REQUESTS_TOTAL, HTTP_REQUEST_DURATION_SECONDS
 
@@ -50,7 +51,10 @@ class ObservabilityASGIMiddleware:
             await self.app(scope, receive, send_wrapper)
         finally:
             duration = time.perf_counter() - start_time
-            endpoint = scope.get("path", "")
+            # Use the registered route template so admission/allocation IDs do
+            # not create an unbounded Prometheus label set.
+            route = scope.get("route")
+            endpoint = getattr(route, "path", "unmatched")
             method = scope.get("method", "GET")
             HTTP_REQUESTS_TOTAL.labels(
                 service=self.service_name,
@@ -75,7 +79,8 @@ def setup_observability_middleware(app: FastAPI, service_name: str, ready_check:
 
     @app.get("/readyz", tags=["operational"])
     async def readyz():
-        if ready_check():
+        # Dependency checks block; keep them off the event loop.
+        if await run_in_threadpool(ready_check):
             return {"status": "ready", "service": service_name}
         return Response(content='{"status": "not_ready"}', status_code=503, media_type="application/json")
 

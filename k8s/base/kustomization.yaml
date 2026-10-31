@@ -1,0 +1,17 @@
+# Pratham-owned workloads (Bed Allocation, Triage). Environment values, images, identities,
+# and secrets come from an overlay; this base deliberately holds no project-specific data.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+labels:
+  - pairs:
+      app.kubernetes.io/managed-by: argocd
+    includeSelectors: false
+resources:
+  - bed-allocation-deployment.yaml
+  - bed-allocation-service.yaml
+  - bed-allocation-hpa.yaml
+  - triage-deployment.yaml
+  - triage-service.yaml
+  - triage-hpa.yaml
+  - pod-disruption-budgets.yaml
+  - network-policies.yaml

@@ -1,0 +1,32 @@
+# Staging overlay. Every PLACEHOLDER value must be replaced from the source listed in
+# docs/gcp-integration-runbook.md ("Variable sources") before ArgoCD syncs this path.
+# scripts/gitops/Set-ImageDigest.ps1 updates the image digests; nothing here is applied by hand.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: PLACEHOLDER_K8S_NAMESPACE          # Terraform var kubernetes_namespace (default "default")
+resources:
+  - ../../base
+  - secret-provider-class.yaml
+images:
+  - name: bed-allocation
+    newName: PLACEHOLDER_REGION-docker.pkg.dev/PLACEHOLDER_PROJECT_ID/PLACEHOLDER_AR_REPOSITORY/bed-allocation
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: triage
+    newName: PLACEHOLDER_REGION-docker.pkg.dev/PLACEHOLDER_PROJECT_ID/PLACEHOLDER_AR_REPOSITORY/triage
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+configMapGenerator:
+  - name: allocation-config
+    envs: [allocation.properties]
+  - name: triage-config
+    envs: [triage.properties]
+patches:
+  - target: {kind: ServiceAccount, name: bed-allocation-sa}
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/iam.gke.io~1gcp-service-account
+        value: PLACEHOLDER_NAME_PREFIX-bed-allocation@PLACEHOLDER_PROJECT_ID.iam.gserviceaccount.com
+  - target: {kind: ServiceAccount, name: triage-sa}
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/iam.gke.io~1gcp-service-account
+        value: PLACEHOLDER_NAME_PREFIX-triage@PLACEHOLDER_PROJECT_ID.iam.gserviceaccount.com

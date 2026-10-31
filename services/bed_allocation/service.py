@@ -14,7 +14,9 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
-from sqlalchemy import or_
+from sqlalchemy import or_, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from services.bed_allocation.clients.base import (
@@ -22,7 +24,8 @@ from services.bed_allocation.clients.base import (
     StaffSchedulerClient, TriageClient
 )
 from services.bed_allocation.db import (
-    AllocationModel, IdempotencyModel, OperationRecoveryModel, OutboxEventModel
+    AllocationModel, IdempotencyModel, OperationRecoveryModel, OutboxEventModel,
+    OutboxStreamCounterModel,
 )
 from services.bed_allocation.models import AllocationResponse, CreateAllocationRequest, ReleaseResponse
 from shared.generated.common_pb2 import MutationContext
@@ -35,6 +38,82 @@ from starlette import status
 import time
 
 ACTIVE_ADMISSION_INDEX = "uq_allocations_active_admission"
+
+
+def _next_outbox_sequence(session, destination: str, pool_id: str) -> int:
+    """Allocate a rollback-safe sequence for one destination and pool stream."""
+    table = OutboxStreamCounterModel.__table__
+    dialect = session.get_bind().dialect.name
+    if dialect == "postgresql":
+        insert_stmt = pg_insert(table)
+    elif dialect == "sqlite":
+        insert_stmt = sqlite_insert(table)
+    else:
+        raise RuntimeError(f"Transactional outbox sequencing is unsupported for database {dialect}")
+    session.execute(
+        insert_stmt.values(destination=destination, pool_id=pool_id, last_sequence=0)
+        .on_conflict_do_nothing(index_elements=["destination", "pool_id"])
+    )
+    result = session.execute(
+        update(table)
+        .where(table.c.destination == destination, table.c.pool_id == pool_id)
+        .values(last_sequence=table.c.last_sequence + 1)
+        .returning(table.c.last_sequence)
+    )
+    return int(result.scalar_one())
+
+
+OUTBOX_TOPICS = (("kafka", "bed-events"), ("pubsub", "bed-notifications"))
+
+
+def _append_outbox_events(
+    session, record, event_type: str, request_id: str, now: datetime, *,
+    lock_wait_ms: Optional[int], lock_contended: bool, allocation_wait_ms: Optional[int],
+    occupancy_delta: int,
+) -> None:
+    """Persist one stable event per destination in the caller's business transaction.
+
+    Counters are taken in the fixed OUTBOX_TOPICS order so concurrent producers lock
+    (destination, pool) counter rows deterministically. Existing event IDs are replays
+    and allocate no new sequence.
+    """
+    workflow = json.loads(record.workflow_data or "{}")
+    patient_id = workflow.get("patient_id")
+    if not isinstance(patient_id, str) or not patient_id:
+        raise RuntimeError("Allocation has no persisted patient identity for its bed event")
+    # Authoritative Bed Registry ward of the assigned bed only; null otherwise (never derived from the pool).
+    ward = workflow.get("ward") if record.bed_id else None
+    for destination, topic in OUTBOX_TOPICS:
+        event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"allocation:{record.allocation_id}:{destination}:{event_type}"))
+        if session.query(OutboxEventModel).filter_by(event_id=event_id).first():
+            continue
+        stream_sequence = _next_outbox_sequence(session, destination, record.pool_id)
+        common = {
+            "schema_version": "1.0.0", "event_id": event_id, "stream_sequence": stream_sequence,
+            "event_type": event_type, "request_id": request_id, "allocation_id": record.allocation_id,
+            "admission_id": record.admission_id, "pool_id": record.pool_id, "bed_id": record.bed_id,
+        }
+        if destination == "pubsub":
+            payload = {**common, "occurred_at": now.isoformat(), "ward": ward}
+        else:
+            payload = {
+                **common, "event_time": now.isoformat(), "patient_id": patient_id,
+                "lock_wait_ms": lock_wait_ms, "lock_contended": lock_contended,
+                "allocation_wait_ms": allocation_wait_ms, "occupancy_delta": occupancy_delta,
+            }
+        session.add(OutboxEventModel(
+            event_id=event_id, destination=destination, pool_id=record.pool_id,
+            stream_sequence=stream_sequence, topic=topic, message_key=record.pool_id,
+            payload=json.dumps(payload), available_at=now,
+        ))
+
+
+def _elapsed_ms(start: Optional[datetime], end: datetime) -> Optional[int]:
+    if start is None:
+        return None
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=timezone.utc)
+    return max(0, int((end - start).total_seconds() * 1000))
 
 def _is_active_admission_conflict(error: IntegrityError) -> bool:
     original = error.orig
@@ -61,7 +140,9 @@ class BedAllocationDomainService:
         lock_client: LockCoordinatorClient,
         bed_client: BedRegistryClient,
         staff_client: StaffSchedulerClient,
-        owner_id: str = "bed-alloc-instance-1"
+        owner_id: str = "bed-alloc-instance-1",
+        lock_lease_ms: int = 10000,
+        lock_wait_timeout_ms: int = 5000,
     ):
         self.session_factory = session_factory
         self.patient_client = patient_client
@@ -70,6 +151,8 @@ class BedAllocationDomainService:
         self.bed_client = bed_client
         self.staff_client = staff_client
         self.owner_id = owner_id
+        self.lock_lease_ms = lock_lease_ms
+        self.lock_wait_timeout_ms = lock_wait_timeout_ms
 
     def _hash_payload(self, payload: dict) -> str:
         serialized = json.dumps(payload, sort_keys=True)
@@ -264,6 +347,9 @@ class BedAllocationDomainService:
             # before any downstream mutation. A unique scoped claim makes a
             # concurrent matching retry observe this same allocation.
             allocation_id = f"alloc-{uuid.uuid4().hex[:10]}"
+            # The accepting request owns the workflow from the insert onward, so the
+            # recovery worker cannot start a second concurrent run of a healthy request.
+            claim_owner = f"{self.owner_id}:request:{uuid.uuid4().hex}"
             alloc_record = AllocationModel(
                 allocation_id=allocation_id,
                 admission_id=req.admission_id,
@@ -271,6 +357,8 @@ class BedAllocationDomainService:
                 status="PROCESSING",
                 pending_action="CHECK_PRIORITY",
                 workflow_data=json.dumps({"patient_id": adm.patient_id}),
+                recovery_claim_owner=claim_owner,
+                recovery_claim_until=datetime.now(timezone.utc) + timedelta(seconds=60),
             )
             try:
                 if idempotency_key:
@@ -316,6 +404,7 @@ class BedAllocationDomainService:
             idempotency_key=idempotency_key,
             request_payload=req.model_dump(),
             started_at=start_time,
+            claim_owner=claim_owner,
         )
 
     def _read_operation(self, operation_id: str) -> Optional[dict]:
@@ -335,13 +424,20 @@ class BedAllocationDomainService:
 
     def _run_create_workflow(
         self, allocation_id: str, request_id: str, idempotency_key: Optional[str],
-        request_payload: dict, started_at: Optional[float] = None,
+        request_payload: dict, started_at: Optional[float] = None, claim_owner: Optional[str] = None,
     ) -> AllocationResponse:
         started_at = started_at or time.perf_counter()
         with self.session_factory() as session:
-            record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
+            record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).with_for_update().first()
             if record is None:
                 raise AppException("NOT_FOUND", "Accepted allocation no longer exists", status.HTTP_404_NOT_FOUND)
+            claim_until = record.recovery_claim_until
+            if claim_until is not None and claim_until.tzinfo is None:
+                claim_until = claim_until.replace(tzinfo=timezone.utc)
+            if record.recovery_claim_owner != claim_owner or claim_until is None or claim_until <= datetime.now(timezone.utc):
+                # Another request or recovery worker owns this workflow (or our claim lapsed).
+                session.rollback()
+                return self._allocation_snapshot(allocation_id)
             req = CreateAllocationRequest(admission_id=record.admission_id, pool_id=record.pool_id)
             workflow = json.loads(record.workflow_data or "{}")
             action = record.pending_action or "FINALIZE_CREATE"
@@ -350,27 +446,36 @@ class BedAllocationDomainService:
             record.recovery_claim_until = datetime.now(timezone.utc) + timedelta(seconds=60)
             session.commit()
 
-        t_lock_start = time.perf_counter()
         try:
             lease = self.lock_client.acquire(
                 pool_id=req.pool_id,
                 owner_id=self.owner_id,
                 acquire_id=f"acq-{allocation_id}",
-                lease_ms=10000,
-                wait_timeout_ms=5000,
+                lease_ms=self.lock_lease_ms,
+                wait_timeout_ms=self.lock_wait_timeout_ms,
             )
         except Exception as error:
             return self._mark_recovering(
                 allocation_id, "CHECK_PRIORITY", f"{allocation_id}:acquire-lock", "ACQUIRE_LOCK", error
             )
-        lock_wait_s = time.perf_counter() - t_lock_start
-        LOCK_WAIT_SECONDS.labels(service="bed-allocation", pool_id=req.pool_id).observe(lock_wait_s)
-        lock_wait_ms = int(lock_wait_s * 1000)
+        # One observation per acquisition: the Coordinator-reported queue wait, not RPC or patient wait.
+        lock_wait_ms = max(0, int(lease.lock_wait_ms))
+        LOCK_WAIT_SECONDS.labels(service="bed-allocation", pool_id=req.pool_id).observe(lock_wait_ms / 1000)
         lease_released = False
         try:
             final_status: Optional[str] = None
             bed_operation_id = f"{allocation_id}:reserve-bed"
             staff_operation_id = f"{allocation_id}:assign-staff"
+
+            if action == "RELEASE_POOL_LOCK":
+                # Only the earlier lock release was unconfirmed (that lease expires on its own).
+                # Resume from the last durable outcome under this fresh lease.
+                staff_done = self._read_operation(staff_operation_id)
+                enqueued = self._read_operation(f"{allocation_id}:enqueue-waitlist")
+                if staff_done and staff_done["status"] == "SUCCEEDED":
+                    action = "ASSIGN_STAFF"
+                elif enqueued and enqueued["status"] == "SUCCEEDED":
+                    action = "ENQUEUE_WAITLIST"
 
             if action == "CHECK_PRIORITY":
                 action = "CHECK_PRIORITY"
@@ -386,10 +491,14 @@ class BedAllocationDomainService:
                         if not has_capacity:
                             final_status = "WAITLISTED"
                         else:
-                            self._update_allocation(allocation_id, bed_id=beds[0].bed_id)
+                            # Ward comes from the Bed Registry record and is persisted for events.
+                            workflow["ward"] = beds[0].ward
+                            self._update_allocation(
+                                allocation_id, bed_id=beds[0].bed_id, workflow_data=json.dumps(workflow)
+                            )
                             self._record_step(
                                 allocation_id, "RESERVE_BED", bed_operation_id, "RESERVE_BED", "INTENDED",
-                                {"bed_id": beds[0].bed_id},
+                                {"bed_id": beds[0].bed_id, "ward": beds[0].ward},
                             )
                             action = "RESERVE_BED"
 
@@ -465,6 +574,7 @@ class BedAllocationDomainService:
                                 RuntimeError("Staff assignment was rejected without confirmed capacity exhaustion"),
                             )
                         workflow["waitlist_reason"] = "STAFF_CAPACITY_CONFIRMED"
+                        workflow.pop("ward", None)
                         self._update_allocation(allocation_id, workflow_data=json.dumps(workflow))
                         action = "COMPENSATE_BED"
                     else:
@@ -641,7 +751,7 @@ class BedAllocationDomainService:
                     payload = {"reason": data.get("reason", "recovery")}
             try:
                 if action == "CREATE":
-                    self._run_create_workflow(allocation_id, request_id, key, payload)
+                    self._run_create_workflow(allocation_id, request_id, key, payload, claim_owner=worker_id)
                 elif action == "RELEASE" and pending_action == "PROMOTE":
                     self._resume_promotion(allocation_id, request_id)
                 elif action == "RELEASE":
@@ -659,7 +769,7 @@ class BedAllocationDomainService:
             record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
             pool_id = record.pool_id
         try:
-            lease = self.lock_client.acquire(pool_id, self.owner_id, f"acq-promotion-{uuid.uuid4().hex}", 10000, 5000)
+            lease = self.lock_client.acquire(pool_id, self.owner_id, f"acq-promotion-{uuid.uuid4().hex}", self.lock_lease_ms, self.lock_wait_timeout_ms)
         except Exception:
             return
         try:
@@ -678,36 +788,14 @@ class BedAllocationDomainService:
     ) -> AllocationResponse:
         with self.session_factory() as session:
             record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).with_for_update().first()
-            workflow = json.loads(record.workflow_data or "{}")
             now = datetime.now(timezone.utc)
-            event_type = "BED_ALLOCATED" if final_status == "ALLOCATED" else "ALLOCATION_WAITLISTED"
-            for destination in ("pubsub", "kafka"):
-                event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"allocation:{allocation_id}:{destination}:{event_type}"))
-                if session.query(OutboxEventModel).filter_by(event_id=event_id).first():
-                    continue
-                if destination == "pubsub":
-                    payload = {
-                        "schema_version": "1.0.0", "event_id": event_id, "event_type": event_type,
-                        "occurred_at": now.isoformat(), "request_id": request_id,
-                        "allocation_id": allocation_id, "admission_id": record.admission_id,
-                        "pool_id": record.pool_id, "bed_id": record.bed_id, "ward": "ICU-A",
-                    }
-                    topic = "bed-notifications"
-                else:
-                    payload = {
-                        "schema_version": "1.0.0", "event_id": event_id, "event_type": event_type,
-                        "event_time": now.isoformat(), "request_id": request_id,
-                        "allocation_id": allocation_id, "admission_id": record.admission_id,
-                        "patient_id": workflow.get("patient_id", f"pat-{record.admission_id}"),
-                        "pool_id": record.pool_id, "bed_id": record.bed_id,
-                        "lock_wait_ms": lock_wait_ms, "lock_contended": lock_wait_ms > 0,
-                        "allocation_wait_ms": 0, "occupancy_delta": 1 if final_status == "ALLOCATED" else 0,
-                    }
-                    topic = "bed-events"
-                session.add(OutboxEventModel(
-                    event_id=event_id, destination=destination, topic=topic,
-                    message_key=record.pool_id, payload=json.dumps(payload),
-                ))
+            allocated = final_status == "ALLOCATED"
+            _append_outbox_events(
+                session, record, "BED_ALLOCATED" if allocated else "ALLOCATION_WAITLISTED", request_id, now,
+                lock_wait_ms=lock_wait_ms, lock_contended=lock_wait_ms > 0,
+                allocation_wait_ms=_elapsed_ms(record.created_at, now) if allocated else None,
+                occupancy_delta=1 if allocated else 0,
+            )
             record.status = final_status
             record.pending_action = None
             record.recovery_claim_owner = None
@@ -742,7 +830,10 @@ class BedAllocationDomainService:
                 raise AppException("STATE_CONFLICT", f"Allocation has pending action '{record.pending_action}'", status.HTTP_409_CONFLICT)
             record.status = state
             record.pending_action = action
-            record.workflow_data = json.dumps(workflow)
+            # Carry persisted event identity (never re-derived) into the release/cancel workflow.
+            prior = json.loads(record.workflow_data or "{}")
+            identity = {name: prior[name] for name in ("patient_id", "ward") if name in prior}
+            record.workflow_data = json.dumps({**identity, **workflow})
             record.recovery_claim_owner = self.owner_id
             record.recovery_claim_until = datetime.now(timezone.utc) + timedelta(seconds=60)
             record.updated_at = datetime.now(timezone.utc)
@@ -790,7 +881,7 @@ class BedAllocationDomainService:
         self._record_step(allocation_id, step, operation_id, step, "SUCCEEDED", details, "RELEASING")
         return details
 
-    def _finalize_release(self, allocation_id, idempotency_key, payload, request_id):
+    def _finalize_release(self, allocation_id, idempotency_key, payload, request_id, lease):
         endpoint = f"POST /api/v1/allocations/{allocation_id}/release"
         with self.session_factory() as session:
             record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).with_for_update().one()
@@ -804,28 +895,37 @@ class BedAllocationDomainService:
             record.recovery_claim_until = now
             record.updated_at = now
             # Stable event IDs make recovery safe if the transaction is retried.
-            for destination, topic in (("pubsub", "bed-notifications"), ("kafka", "bed-events")):
-                event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"allocation:{allocation_id}:{destination}:BED_RELEASED"))
-                if session.query(OutboxEventModel).filter_by(event_id=event_id).first():
-                    continue
-                event = {
-                    "schema_version": "1.0.0", "event_id": event_id, "event_type": "BED_RELEASED",
-                    ("occurred_at" if destination == "pubsub" else "event_time"): now.isoformat(),
-                    "request_id": request_id, "allocation_id": allocation_id,
-                    "admission_id": record.admission_id, "pool_id": record.pool_id,
-                    "bed_id": record.bed_id, "occupancy_delta": -1,
-                }
-                session.add(OutboxEventModel(event_id=event_id, destination=destination, topic=topic,
-                    message_key=record.pool_id, payload=json.dumps(event)))
+            lock_wait_ms = max(0, int(lease.lock_wait_ms))
+            _append_outbox_events(
+                session, record, "BED_RELEASED", request_id, now,
+                lock_wait_ms=lock_wait_ms, lock_contended=lock_wait_ms > 0, allocation_wait_ms=None,
+                occupancy_delta=-1 if record.bed_id else 0,
+            )
             self._complete_mutating_claim(session, allocation_id, endpoint, payload, idempotency_key, response)
             session.commit()
             return record.pool_id
+
+    def _record_promotion_events(self, session, candidate, ward, lease, request_id, report_lock_wait):
+        """Emit the promoted candidate's +1 occupancy events in its ALLOCATED transaction."""
+        workflow = json.loads(candidate.workflow_data or "{}")
+        if ward:
+            workflow["ward"] = ward
+        else:
+            workflow.pop("ward", None)
+        candidate.workflow_data = json.dumps(workflow)
+        now = datetime.now(timezone.utc)
+        lock_wait_ms = max(0, int(lease.lock_wait_ms))
+        _append_outbox_events(
+            session, candidate, "BED_ALLOCATED", request_id, now,
+            lock_wait_ms=lock_wait_ms if report_lock_wait else None, lock_contended=lock_wait_ms > 0,
+            allocation_wait_ms=_elapsed_ms(candidate.created_at, now), occupancy_delta=1,
+        )
 
     def _promotion_context(self, operation_id, request_id, lease):
         return MutationContext(operation_id=operation_id, request_id=request_id, pool_id=lease.pool_id,
             lock_id=lease.lock_id, owner_id=lease.owner_id, fencing_token=lease.fencing_token)
 
-    def _promote_next_locked(self, allocation_id, lease, request_id):
+    def _promote_next_locked(self, allocation_id, lease, request_id, report_lock_wait=True):
         """Attempt one priority-ordered promotion while holding the already acquired pool lease."""
         with self.session_factory() as session:
             release_record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
@@ -896,6 +996,7 @@ class BedAllocationDomainService:
                     candidate.bed_id = details.get("bed_id", candidate.bed_id)
                     candidate.staff_assignment_id = details.get("staff_assignment_id", candidate.staff_assignment_id)
                     candidate.waitlist_entry_id = None
+                    self._record_promotion_events(session, candidate, details.get("ward"), lease, request_id, report_lock_wait)
                 release_record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
                 release_record.pending_action = None
                 release_record.recovery_claim_owner = None
@@ -920,13 +1021,15 @@ class BedAllocationDomainService:
         if not has_capacity and not self._read_operation(staff_op):
             return None
         target_bed = next((bed for bed in available_beds if bed.bed_id == target_bed_id), None)
-        if target_bed is None:
-            target_bed = BedDto(bed_id=target_bed_id, pool_id=lease.pool_id, ward="ICU-A", status="OCCUPIED", current_allocation_id=candidate_id)
+        # A bed already reserved by this promotion is no longer listed; reuse the ward recorded with it.
+        target_ward = target_bed.ward if target_bed else (prior_bed["details"].get("ward") if prior_bed else None)
+        target_bed = target_bed or BedDto(bed_id=target_bed_id, pool_id=lease.pool_id, ward=target_ward or "",
+            status="OCCUPIED", current_allocation_id=candidate_id)
         try:
-            self._record_step(allocation_id, "PROMOTE", bed_op, "PROMOTE_BED", "INTENDED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id}, "RELEASED")
+            self._record_step(allocation_id, "PROMOTE", bed_op, "PROMOTE_BED", "INTENDED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id, "ward": target_ward}, "RELEASED")
             bed_ok, _, _ = self.bed_client.allocate_bed(self._promotion_context(bed_op, request_id, lease), target_bed.bed_id, candidate_id)
             if not bed_ok:
-                self._record_step(allocation_id, "PROMOTE", bed_op, "PROMOTE_BED", "FAILED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id}, "RELEASED")
+                self._record_step(allocation_id, "PROMOTE", bed_op, "PROMOTE_BED", "FAILED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id, "ward": target_ward}, "RELEASED")
                 with self.session_factory() as session:
                     record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
                     data = json.loads(record.workflow_data or "{}")
@@ -938,17 +1041,17 @@ class BedAllocationDomainService:
                     record.recovery_claim_until = datetime.now(timezone.utc)
                     session.commit()
                 return None
-            self._record_step(allocation_id, "PROMOTE", bed_op, "PROMOTE_BED", "SUCCEEDED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id}, "RELEASED")
-            self._record_step(allocation_id, "PROMOTE", staff_op, "PROMOTE_STAFF", "INTENDED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id}, "RELEASED")
+            self._record_step(allocation_id, "PROMOTE", bed_op, "PROMOTE_BED", "SUCCEEDED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id, "ward": target_ward}, "RELEASED")
+            self._record_step(allocation_id, "PROMOTE", staff_op, "PROMOTE_STAFF", "INTENDED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id, "ward": target_ward}, "RELEASED")
             staff_ok, assignment_id, _, _ = self.staff_client.assign_staff(self._promotion_context(staff_op, request_id, lease), candidate_id, target_bed.bed_id)
             if not staff_ok:
                 # Never remove the queue entry. Persist compensation intent before releasing our bed.
                 compensation_id = f"{candidate_id}:prom-compensate-bed:{attempt}"
-                self._record_step(allocation_id, "PROMOTE", compensation_id, "PROMOTE_COMPENSATE_BED", "INTENDED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id}, "RELEASED")
+                self._record_step(allocation_id, "PROMOTE", compensation_id, "PROMOTE_COMPENSATE_BED", "INTENDED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id, "ward": target_ward}, "RELEASED")
                 released, _ = self.bed_client.release_bed(self._promotion_context(compensation_id, request_id, lease), target_bed.bed_id, candidate_id)
                 if not released:
                     raise RuntimeError("Promotion compensation was not confirmed")
-                self._record_step(allocation_id, "PROMOTE", compensation_id, "PROMOTE_COMPENSATE_BED", "SUCCEEDED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id}, "RELEASED")
+                self._record_step(allocation_id, "PROMOTE", compensation_id, "PROMOTE_COMPENSATE_BED", "SUCCEEDED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id, "ward": target_ward}, "RELEASED")
                 with self.session_factory() as session:
                     record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
                     data = json.loads(record.workflow_data or "{}")
@@ -960,13 +1063,13 @@ class BedAllocationDomainService:
                     record.recovery_claim_until = datetime.now(timezone.utc)
                     session.commit()
                 return None
-            self._record_step(allocation_id, "PROMOTE", staff_op, "PROMOTE_STAFF", "SUCCEEDED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id, "staff_assignment_id": assignment_id}, "RELEASED")
+            self._record_step(allocation_id, "PROMOTE", staff_op, "PROMOTE_STAFF", "SUCCEEDED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id, "ward": target_ward, "staff_assignment_id": assignment_id}, "RELEASED")
             self._record_step(allocation_id, "PROMOTE", remove_op, "PROMOTE_REMOVE_QUEUE", "INTENDED", {"candidate_id": candidate_id}, "RELEASED")
             removed = self.triage_client.remove_entry(self._promotion_context(remove_op, request_id, lease), candidate_id, "promoted")
             if not removed:
                 raise RuntimeError("Promotion queue removal was not confirmed")
             self._record_step(allocation_id, "PROMOTE", remove_op, "PROMOTE_REMOVE_QUEUE", "SUCCEEDED", {"candidate_id": candidate_id}, "RELEASED")
-            self._record_step(allocation_id, "PROMOTE", f"{candidate_id}:promotion-confirmed", "PROMOTION_CONFIRMED", "SUCCEEDED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id, "staff_assignment_id": assignment_id}, "RELEASED")
+            self._record_step(allocation_id, "PROMOTE", f"{candidate_id}:promotion-confirmed", "PROMOTION_CONFIRMED", "SUCCEEDED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id, "ward": target_ward, "staff_assignment_id": assignment_id}, "RELEASED")
             with self.session_factory() as session:
                 candidate = session.query(AllocationModel).filter_by(allocation_id=candidate_id).with_for_update().first()
                 if candidate:
@@ -975,6 +1078,7 @@ class BedAllocationDomainService:
                     candidate.staff_assignment_id = assignment_id
                     candidate.waitlist_entry_id = None
                     candidate.updated_at = datetime.now(timezone.utc)
+                    self._record_promotion_events(session, candidate, target_ward, lease, request_id, report_lock_wait)
                 released_record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
                 released_record.pending_action = None
                 released_record.recovery_claim_owner = None
@@ -1026,7 +1130,7 @@ class BedAllocationDomainService:
             data = json.loads(record.workflow_data or "{}")
             pool_id, bed_id, assignment_id = record.pool_id, record.bed_id, record.staff_assignment_id
         try:
-            lease = self.lock_client.acquire(pool_id, self.owner_id, f"acq-release-{uuid.uuid4().hex}", 10000, 5000)
+            lease = self.lock_client.acquire(pool_id, self.owner_id, f"acq-release-{uuid.uuid4().hex}", self.lock_lease_ms, self.lock_wait_timeout_ms)
         except Exception as error:
             return self._mark_recovering(allocation_id, "RELEASE_BED", f"{allocation_id}:release-bed", "RELEASE_BED", error)
         released = False
@@ -1041,11 +1145,12 @@ class BedAllocationDomainService:
                     lambda op, current, _: self.staff_client.release_assignment(self._promotion_context(op, request_id, current), assignment_id, allocation_id))
                 if result is None:
                     return self._allocation_snapshot(allocation_id)
-            pool_id = self._finalize_release(allocation_id, idempotency_key, payload, request_id)
+            pool_id = self._finalize_release(allocation_id, idempotency_key, payload, request_id, lease)
             released = True
             # Release is durable before promotion; failure can only leave the queue and retry action intact.
             try:
-                self._promote_next_locked(allocation_id, lease, request_id)
+                # The release event already carries this acquisition's lock wait.
+                self._promote_next_locked(allocation_id, lease, request_id, report_lock_wait=False)
             except Exception:
                 # The release transaction is already committed and its response cached.
                 # Keep promotion claimable without changing the confirmed release.
@@ -1083,7 +1188,7 @@ class BedAllocationDomainService:
                 record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
                 data = json.loads(record.workflow_data or "{}")
                 pool_id, reason = record.pool_id, data.get("reason", "cancelled")
-            lease = self.lock_client.acquire(pool_id, self.owner_id, f"acq-cancel-{uuid.uuid4().hex}", 10000, 5000)
+            lease = self.lock_client.acquire(pool_id, self.owner_id, f"acq-cancel-{uuid.uuid4().hex}", self.lock_lease_ms, self.lock_wait_timeout_ms)
         except Exception as error:
             return self._mark_recovering(allocation_id, "CANCEL_QUEUE", f"{allocation_id}:cancel-waitlist", "CANCEL_QUEUE", error)
         try:

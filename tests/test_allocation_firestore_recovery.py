@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-from services.bed_allocation.clients.fakes import (
+from tests.support.allocation_fakes import (
     FakeBedRegistryClient, FakeLockCoordinatorClient, FakePatientRegistryClient,
     FakeStaffSchedulerClient, DirectTriageClient,
 )
@@ -17,7 +17,7 @@ from services.bed_allocation.models import CreateAllocationRequest
 from services.bed_allocation.service import BedAllocationDomainService
 from services.triage.repository.firestore import FirestoreTriageRepository
 from services.triage.service import TriageDomainService
-from services.triage.validation import MockFencingValidator
+from tests.support.triage_fakes import MockFencingValidator
 from shared.observability.errors import AppException
 
 
