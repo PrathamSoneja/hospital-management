@@ -1,0 +1,15 @@
+# Approved Allocation schema migration. Synced ONLY manually through its own ArgoCD
+# Application after the migration change is approved; never part of the app sync.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: PLACEHOLDER_K8S_NAMESPACE
+resources:
+  - migration-job.yaml
+images:
+  - name: bed-allocation
+    newName: PLACEHOLDER_REGION-docker.pkg.dev/PLACEHOLDER_PROJECT_ID/PLACEHOLDER_AR_REPOSITORY/bed-allocation
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+configMapGenerator:
+  - name: allocation-migration-config
+    literals:
+      - CLOUD_SQL_INSTANCE_CONNECTION_NAME=PLACEHOLDER_PROJECT_ID:PLACEHOLDER_REGION:PLACEHOLDER_SQL_INSTANCE

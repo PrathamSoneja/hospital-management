@@ -6,8 +6,13 @@ metadata:
     app.kubernetes.io/name: triage-service
     app.kubernetes.io/part-of: hospital-bed-management
 spec:
-  # Initial replica count managed by HPA; ArgoCD configured with ignoreDifferences on /spec/replicas
-  replicas: 2
+  # No `replicas`: the HPA (2-6) owns the count, and ArgoCD ignores /spec/replicas.
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: triage-service
@@ -15,22 +20,47 @@ spec:
     metadata:
       labels:
         app: triage-service
+        app.kubernetes.io/name: triage-service
+        app.kubernetes.io/part-of: hospital-bed-management
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8000"
         prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: triage-sa
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: triage-service
       containers:
         - name: triage
-          image: us-central1-docker.pkg.dev/hospital-bed-mgmt-dev/hospital-repo/triage:latest
+          image: triage
           imagePullPolicy: IfNotPresent
           ports:
             - name: http-rest
               containerPort: 8000
             - name: grpc-internal
               containerPort: 50051
+          envFrom:
+            - configMapRef:
+                name: triage-config
           env:
+            - name: TRIAGE_INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: TRIAGE_REST_HOST
               value: "0.0.0.0"
             - name: TRIAGE_REST_PORT
@@ -40,28 +70,45 @@ spec:
             - name: START_GRPC
               value: "true"
             - name: TRIAGE_STORAGE_BACKEND
-              value: "firestore"
-            - name: FIRESTORE_PROJECT_ID
-              valueFrom:
-                configMapKeyRef:
-                  name: hospital-config
-                  key: GCP_PROJECT_ID
+              value: firestore
+            - name: TRIAGE_FENCING_MODE
+              value: coordinator
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               cpu: 250m
               memory: 256Mi
             limits:
-              cpu: 500m
               memory: 512Mi
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http-rest
+            periodSeconds: 2
+            failureThreshold: 30
           livenessProbe:
             httpGet:
               path: /healthz
-              port: 8000
-            initialDelaySeconds: 10
+              port: http-rest
             periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Readiness checks Firestore and the Coordinator with 0.5 s bounds each.
           readinessProbe:
             httpGet:
               path: /readyz
-              port: 8000
-            initialDelaySeconds: 5
+              port: http-rest
             periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

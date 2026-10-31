@@ -21,5 +21,5 @@ kind: ServiceAccount
 metadata:
   name: triage-sa
   annotations:
-    # Workload Identity Federation binding to GCP Service Account
-    iam.gke.io/gcp-service-account: triage-sa@hospital-bed-mgmt-dev.iam.gserviceaccount.com
+    # Overlay sets the Terraform-created GSA (iam module: <name_prefix>-triage@<project>.iam.gserviceaccount.com).
+    iam.gke.io/gcp-service-account: set-by-overlay

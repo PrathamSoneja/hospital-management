@@ -18,5 +18,5 @@ kind: ServiceAccount
 metadata:
   name: bed-allocation-sa
   annotations:
-    # Workload Identity Federation binding to GCP Service Account for Pub/Sub & Cloud SQL
-    iam.gke.io/gcp-service-account: bed-allocation-sa@hospital-bed-mgmt-dev.iam.gserviceaccount.com
+    # Overlay sets the Terraform-created GSA (iam module: <name_prefix>-bed-allocation@<project>.iam.gserviceaccount.com).
+    iam.gke.io/gcp-service-account: set-by-overlay

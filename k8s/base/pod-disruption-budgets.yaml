@@ -1,0 +1,20 @@
+# Keep at least one replica serving through node upgrades and drains.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: bed-allocation-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: bed-allocation-service
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: triage-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: triage-service

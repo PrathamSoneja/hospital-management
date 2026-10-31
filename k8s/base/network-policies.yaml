@@ -1,0 +1,53 @@
+# Private internals: ingress only from this system's pods and the monitoring namespace.
+# Enforcement requires GKE Dataplane V2 / network policy enforcement (cluster setting owned by
+# Terraform); without it these objects are accepted but not enforced. Egress stays open for DNS,
+# the GKE metadata server (Workload Identity), Cloud SQL proxy, Firestore, Pub/Sub, and Kafka.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: bed-allocation-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: bed-allocation-service
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: hospital-bed-management
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8000
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: triage-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: triage-service
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: hospital-bed-management
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8000
+          protocol: TCP
+    # Queue mutations over gRPC come only from Bed Allocation.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: bed-allocation-service
+      ports:
+        - port: 50051
+          protocol: TCP

@@ -1,0 +1,78 @@
+# Runs `alembic upgrade head` with the MIGRATION (schema-owner) database user, which is
+# separate from the least-privilege runtime user in allocation-database-url.
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: allocation-migration-secrets
+spec:
+  provider: gke
+  parameters:
+    secrets: |
+      - resourceName: "projects/PLACEHOLDER_PROJECT_ID/secrets/allocation-migration-database-url/versions/latest"
+        path: "database-url"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # Rename per approved revision (e.g. allocation-migrate-20261031-03) so a Job is never reused.
+  name: allocation-migrate-PLACEHOLDER_REVISION
+  labels:
+    app.kubernetes.io/part-of: hospital-bed-management
+spec:
+  backoffLimit: 0                 # a failed migration needs review, not automatic retries
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: allocation-migrate
+        app.kubernetes.io/part-of: hospital-bed-management
+    spec:
+      restartPolicy: Never
+      serviceAccountName: bed-allocation-sa
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: cloud-sql-proxy
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.14.1
+          restartPolicy: Always   # native sidecar: exits when the migration container finishes
+          args: ["--private-ip", "--structured-logs", "--port=5432", "--health-check",
+                 "--http-address=0.0.0.0", "--http-port=9801", "$(CLOUD_SQL_INSTANCE_CONNECTION_NAME)"]
+          envFrom:
+            - configMapRef:
+                name: allocation-migration-config
+          startupProbe:
+            httpGet: {path: /startup, port: 9801}
+            periodSeconds: 2
+            failureThreshold: 30
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+      containers:
+        - name: migrate
+          image: bed-allocation
+          command: ["sh", "-c", "export DATABASE_URL=\"$(cat /var/run/secrets/migration/database-url)\" && python -m alembic upgrade head && python -m alembic current"]
+          volumeMounts:
+            - name: migration-secrets
+              mountPath: /var/run/secrets/migration
+              readOnly: true
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+      volumes:
+        - name: migration-secrets
+          csi:
+            driver: secrets-store-gke.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: allocation-migration-secrets

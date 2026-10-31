@@ -6,8 +6,13 @@ metadata:
     app.kubernetes.io/name: bed-allocation-service
     app.kubernetes.io/part-of: hospital-bed-management
 spec:
-  # Initial replica count managed by HPA; ArgoCD configured with ignoreDifferences on /spec/replicas
-  replicas: 2
+  # No `replicas`: the HPA (2-10) owns the count, and ArgoCD ignores /spec/replicas.
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: bed-allocation-service
@@ -15,19 +20,78 @@ spec:
     metadata:
       labels:
         app: bed-allocation-service
+        app.kubernetes.io/name: bed-allocation-service
+        app.kubernetes.io/part-of: hospital-bed-management
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8000"
         prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: bed-allocation-sa
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: bed-allocation-service
+      initContainers:
+        # Native sidecar (restartPolicy: Always): starts before and stops after the app.
+        # Private IP only; authenticates with the pod's Workload Identity.
+        - name: cloud-sql-proxy
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.14.1
+          restartPolicy: Always
+          args:
+            - --private-ip
+            - --structured-logs
+            - --port=5432
+            - --health-check
+            - --http-address=0.0.0.0
+            - --http-port=9801
+            - $(CLOUD_SQL_INSTANCE_CONNECTION_NAME)
+          env:
+            - name: CLOUD_SQL_INSTANCE_CONNECTION_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: allocation-config
+                  key: CLOUD_SQL_INSTANCE_CONNECTION_NAME
+          startupProbe:
+            httpGet:
+              path: /startup
+              port: 9801
+            periodSeconds: 2
+            failureThreshold: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
       containers:
         - name: bed-allocation
-          image: us-central1-docker.pkg.dev/hospital-bed-mgmt-dev/hospital-repo/bed-allocation:latest
+          # Kustomize overlays replace this with the Artifact Registry path and an immutable digest.
+          image: bed-allocation
           imagePullPolicy: IfNotPresent
           ports:
             - name: http-rest
               containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: allocation-config
           env:
             - name: POD_NAME
               valueFrom:
@@ -37,39 +101,59 @@ spec:
               value: "0.0.0.0"
             - name: ALLOCATION_REST_PORT
               value: "8000"
-            - name: DATABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: cloudsql-db-credentials
-                  key: DATABASE_URL
-            - name: LOCK_SERVICE_ADDR
-              value: "lock-coordinator-service:50051"
-            - name: BED_SERVICE_ADDR
-              value: "bed-registry-service:50051"
-            - name: STAFF_SERVICE_ADDR
-              value: "staff-scheduler-service:50051"
-            - name: TRIAGE_SERVICE_ADDR
-              value: "triage-service:50051"
-            - name: PATIENT_SERVICE_URL
-              value: "http://patient-registry-service:8000/api/v1"
-            - name: ENABLE_RECOVERY_WORKER
-              value: "true"
+            # Secret Manager values are mounted as files by the GKE Secret Manager CSI add-on.
+            - name: DATABASE_URL_FILE
+              value: /var/run/secrets/app/database-url
+            - name: KAFKA_SASL_USERNAME_FILE
+              value: /var/run/secrets/app/kafka-sasl-username
+            - name: KAFKA_SASL_PASSWORD_FILE
+              value: /var/run/secrets/app/kafka-sasl-password
+          volumeMounts:
+            - name: app-secrets
+              mountPath: /var/run/secrets/app
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               cpu: 250m
               memory: 256Mi
             limits:
-              cpu: 500m
               memory: 512Mi
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http-rest
+            periodSeconds: 2
+            failureThreshold: 30
+          # Liveness is process-only; dependency outages must not restart pods.
           livenessProbe:
             httpGet:
               path: /healthz
-              port: 8000
-            initialDelaySeconds: 15
+              port: http-rest
             periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Readiness runs a bounded database check and removes the pod from Service endpoints.
           readinessProbe:
             httpGet:
               path: /readyz
-              port: 8000
-            initialDelaySeconds: 5
+              port: http-rest
             periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: app-secrets
+          csi:
+            driver: secrets-store-gke.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: allocation-secrets
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
