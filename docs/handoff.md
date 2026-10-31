@@ -17,7 +17,7 @@ Commits after `6ea9f85`: `7c20453` nullable-ward notifications, `5d896cd` cloud-
 - **LOCAL-VERIFIED (observability):** HTTP metric labels are route templates; 0 label values contain IDs after load; request ID echoed and present in structured JSON logs (`severity`, `request_id`).
 - **GENERATED-UNDEPLOYED:** `k8s/base`, `k8s/overlays/staging` (placeholders only, digest-pinned images), migration Job (manual ArgoCD sync, separate schema-owner credential), ArgoCD Applications ignoring `/spec/replicas`, optional Managed Prometheus component, PowerShell cloud scripts (guarded, **UNEXECUTED**), `docs/gcp-integration-runbook.md`.
 - **BLOCKED / teammate:** Terraform provisions Confluent Cloud Kafka (conflicts with Kafka-on-GKE); no Allocation DB users; Allocation GSA lacks Pub/Sub publisher + Secret Manager accessor; Secret Manager CSI, network-policy enforcement, Managed Prometheus not enabled; no Pub/Sub/Eventarc/Cloud Run, Kafka topic, or teammate endpoints; `stream_sequence` + nullable `ward` contract acceptance pending (Nisarg, Jay). Details and owners: runbook section 0.
-- **Pending decision (unchanged):** staged deletion of `.env.example` (replaced by `.env.gcp.example`/`.env.local.example`); `infra/terraform/outputs.tf` edit left uncommitted for Ruchir.
+- **Resolved:** `.env.example` removed (approved); `.env.gcp.example` and `.env.local.example` replace it. `infra/terraform/outputs.tf` edit remains uncommitted for Ruchir.
 
 ### Required environment values (all still unset)
 
