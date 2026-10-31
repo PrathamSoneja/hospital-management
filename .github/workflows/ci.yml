@@ -55,6 +55,12 @@ jobs:
         run: |
           terraform fmt -check -recursive infra/terraform
           docker compose config --quiet
+      - name: Render and validate Kubernetes manifests
+        run: |
+          mkdir -p rendered
+          kubectl kustomize k8s/overlays/staging > rendered/staging.yaml
+          kubectl kustomize k8s/jobs/allocation-migrate > rendered/migrate.yaml
+          docker run --rm -v "$PWD/rendered:/m:ro" ghcr.io/yannh/kubeconform:v0.6.7             -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0 /m/staging.yaml /m/migrate.yaml
       - name: Migrate empty database and check model drift
         env:
           DATABASE_URL: postgresql+psycopg2://postgres:ci-only@localhost:5432/hospital_allocation_ci_test
