@@ -104,6 +104,8 @@ Every state mutation RPC (`TriageService.Enqueue`, `TriageService.RemoveEntry`, 
 Triggered by Bed Allocation state changes, delivered to Cloud Run serverless function via Eventarc.
 - **Payload Schema**: [`contracts/events/notification.schema.json`](file:///contracts/events/notification.schema.json)
 - **Supported Event Types**: `BED_ALLOCATED`, `ALLOCATION_WAITLISTED`, `BED_RELEASED`, `ALLOCATION_CONFLICT`.
+- **Ordering/deduplication**: `event_id` is stable per event; `stream_sequence` increases per (`pool_id`, destination) in producer-commit order. Delivery is at-least-once: deduplicate on `event_id`, use gaps to detect missing messages, and do not discard lower sequences automatically. Attributes `event_id`, `pool_id`, `stream_sequence` are set on each message.
+- **Ward**: the Bed Registry ward of the assigned bed, or `null` when none is assigned (waitlisted). Route staff notifications by `pool_id`; do not infer a ward. Acceptance by the Notification owner (Nisarg) is pending.
 
 ### Bed Event (`bed-events` on Kafka)
 Triggered for stream processing by Apache Flink on Dataproc.

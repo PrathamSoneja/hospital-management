@@ -52,9 +52,12 @@ def test_valid_notification_events(notification_schema):
         "admission_id": "adm-002",
         "pool_id": "WARDA-ICU",
         "bed_id": None,
-        "ward": "ICU-A"
+        "ward": None
     }
     validate(instance=valid_waitlisted, schema=notification_schema)
+    # ward stays required: a producer must state null explicitly rather than omit it.
+    with pytest.raises(ValidationError):
+        validate(instance={k: v for k, v in valid_waitlisted.items() if k != "ward"}, schema=notification_schema)
 
 def test_invalid_notification_event_rejected(notification_schema):
     # Invalid event_type

@@ -58,7 +58,8 @@
       "type": ["string", "null"]
     },
     "ward": {
-      "type": "string"
+      "type": ["string", "null"],
+      "description": "Ward of the assigned bed from the Bed Registry; null when no bed is assigned (for example ALLOCATION_WAITLISTED). Route by pool_id, never by a derived ward."
     }
   },
   "additionalProperties": false

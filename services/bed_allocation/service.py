@@ -81,11 +81,9 @@ def _append_outbox_events(
     patient_id = workflow.get("patient_id")
     if not isinstance(patient_id, str) or not patient_id:
         raise RuntimeError("Allocation has no persisted patient identity for its bed event")
+    # Authoritative Bed Registry ward of the assigned bed only; null otherwise (never derived from the pool).
     ward = workflow.get("ward") if record.bed_id else None
     for destination, topic in OUTBOX_TOPICS:
-        if destination == "pubsub" and not ward:
-            # The notification contract requires a ward; it is never guessed from the pool.
-            continue
         event_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"allocation:{record.allocation_id}:{destination}:{event_type}"))
         if session.query(OutboxEventModel).filter_by(event_id=event_id).first():
             continue

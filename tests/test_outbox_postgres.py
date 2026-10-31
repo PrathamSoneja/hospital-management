@@ -241,9 +241,11 @@ def test_business_events_are_schema_valid_stable_and_not_duplicated_on_replay(pg
     # The promotion shares the release's lock acquisition, so it reports no second wait.
     assert kafka[3]["lock_wait_ms"] is not None and kafka[4]["lock_wait_ms"] is None
     assert kafka[2]["allocation_wait_ms"] is None
-    # Notification ward comes from the Bed Registry; the bedless waitlist notification is not emitted.
-    assert {e["ward"] for e in pubsub} == {"WARD-NORTH"}
-    assert [e["event_type"] for e in pubsub] == ["BED_ALLOCATED", "BED_ALLOCATED", "BED_RELEASED", "BED_ALLOCATED"]
+    # Notification ward comes from the Bed Registry; a bedless waitlist notification carries null.
+    assert [(e["event_type"], e["ward"]) for e in pubsub] == [
+        ("BED_ALLOCATED", "WARD-NORTH"), ("BED_ALLOCATED", "WARD-NORTH"), ("ALLOCATION_WAITLISTED", None),
+        ("BED_RELEASED", "WARD-NORTH"), ("BED_ALLOCATED", "WARD-NORTH"),
+    ]
 
 
 def test_expired_claim_is_reclaimed_and_stale_ack_cannot_overwrite(pg_sessions):
