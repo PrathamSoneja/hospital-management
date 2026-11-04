@@ -10,7 +10,7 @@ for pods. Never export access tokens, never create service-account key files, ne
 `GOOGLE_APPLICATION_CREDENTIALS`.
 
 Platform (fixed): GKE Standard, Artifact Registry, Cloud SQL PostgreSQL, Firestore Native, GCS,
-Pub/Sub → Eventarc → Cloud Run function, Secret Manager, Cloud Logging, Dataproc/Flink, Kafka and
+Pub/Sub → Eventarc → Cloud Run service, Secret Manager, Cloud Logging, Dataproc/Flink, Kafka and
 ZooKeeper self-hosted on GKE. Terraform provisions infrastructure; ArgoCD deploys applications; no
 application `kubectl apply`.
 
@@ -29,17 +29,17 @@ Conflicts found in the current Terraform (not changed by Pratham):
 1. **Confluent Cloud Kafka** (`modules/confluent`, `confluent_*` variables/outputs) contradicts the
    GKE-hosted Kafka + ZooKeeper requirement. Owners: Ruchir + Jay decide; Allocation needs only an
    in-cluster bootstrap address, topic, security protocol, and SASL secret names.
-2. **Database passwords as Terraform variables** (`db_admin_password`, `patient_registry_db_password`)
-   land in Terraform state. Prefer Cloud SQL IAM database authentication or Secret Manager-generated
-   passwords. Owner: Ruchir.
-3. **No Allocation database users.** Terraform creates the `allocations` database but only the admin and
-   Patient users. Allocation needs a schema-owner **migration** user and a least-privilege **runtime** user.
-4. **`bed-allocation` GSA has only `roles/cloudsql.client`.** It also needs `roles/pubsub.publisher` on the
-   notifications topic and `roles/secretmanager.secretAccessor` on the three Allocation secrets.
-5. **Cluster features not enabled in Terraform:** Secret Manager CSI add-on, network-policy enforcement
-   (Dataplane V2), and (optionally) Managed Service for Prometheus collection.
-6. Pub/Sub topic, Eventarc trigger, Cloud Run function, Secret Manager secrets, and budgets are not in
-   Terraform yet.
+2. Cloud SQL passwords use the provider's write-only password arguments and are not retained in Terraform
+   state. Secret Manager values are deliberately not provisioned by Terraform.
+3. Terraform creates distinct Allocation runtime and migration users. Before the first migration, a
+   database owner must grant `USAGE, CREATE` on schema `public` to `allocation_migrator`; revision
+   `20261031_04` grants runtime DML to `allocation_app` on current and future tables/sequences.
+4. `bed-allocation` has topic-scoped Pub/Sub publisher permission and access only to its database and
+   Kafka secrets. Patient Registry has access only to its database secret.
+5. GKE Secret Manager CSI, Dataplane V2 NetworkPolicy enforcement, and managed Prometheus collection
+   are enabled in Terraform.
+6. Terraform defines the Pub/Sub topic, Eventarc trigger, private Cloud Run service, and Secret Manager
+   secret containers. Applying requires the Notification image from Nisarg (C).
 
 ## 1. Project, billing, budget, IAM, state (Ruchir)
 
@@ -79,21 +79,20 @@ Allocation connects through the Cloud SQL Auth Proxy sidecar (`--private-ip`) us
 
 ## 3. Databases, users, migrations vs runtime (Ruchir creates users; Pratham runs approved migration)
 
-1. Create two Allocation users (preferred: IAM database users; otherwise generated passwords stored only
-   in Secret Manager):
+1. Terraform creates two Allocation users with write-only passwords:
    - `allocation_migrator` — owns schema objects in `allocations`.
    - `allocation_app` — `CONNECT`, `USAGE` on schema, `SELECT/INSERT/UPDATE/DELETE` on tables, `USAGE` on
      sequences; no DDL.
 2. Store URLs (never in Git):
    - `allocation-migration-database-url` = `postgresql+psycopg2://allocation_migrator:<SECRET>@127.0.0.1:5432/allocations`
    - `allocation-database-url` = `postgresql+psycopg2://allocation_app:<SECRET>@127.0.0.1:5432/allocations`
-3. Migration (after approval of revision `20261031_03` for staging):
+3. Before the first migration only, have a database owner grant `USAGE, CREATE` on schema `public` to
+   `allocation_migrator`. Then run the migration job with `allocation-migration-database-url` (after approval):
    ```powershell
-   .\scripts\cloud\Start-ApprovedMigration.ps1 -ProjectId <PROJECT_ID> -KubeContext <KUBE_CONTEXT> -Revision 20261031_03
+   .\scripts\cloud\Start-ApprovedMigration.ps1 -ProjectId <PROJECT_ID> -KubeContext <KUBE_CONTEXT> -Revision 20261031_04
    ```
-   Expected: Job completes; log ends with `20261031_03 (head)`. Legacy outbox rows are reported (not changed).
-4. Grant `allocation_app` privileges on the new tables after migration (Ruchir/DBA), then verify the app
-   cannot run DDL.
+   Expected: Job completes; log ends with `20261031_04 (head)`. Legacy outbox rows are reported (not changed).
+4. Verify the app can access tables/sequences but cannot run DDL.
 
 Rollback: the migration has a tested `downgrade()`, but downgrading needs separate approval; prefer
 roll-forward. Never run migrations from a laptop against the shared database.
@@ -125,7 +124,7 @@ gcloud secrets add-iam-policy-binding allocation-database-url `
 GCS: Allocation/Triage use no buckets. Identity: KSAs `bed-allocation-sa` and `triage-sa` in
 `<K8S_NAMESPACE>` map to `<NAME_PREFIX>-bed-allocation` / `<NAME_PREFIX>-triage` (Terraform `iam` module).
 
-## 5. Pub/Sub → Eventarc → Cloud Run function (Nisarg)
+## 5. Pub/Sub → Eventarc → Cloud Run service (Nisarg)
 
 Required for Allocation: topic `<PUBSUB_TOPIC>`; `roles/pubsub.publisher` for the Allocation GSA; the
 function must accept the notification schema in `contracts/events/notification.schema.json`, including
