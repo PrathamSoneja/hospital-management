@@ -2,6 +2,7 @@
 import json
 import os
 import threading
+import re
 import time
 
 from kazoo.client import KazooClient
@@ -9,7 +10,7 @@ from kazoo.exceptions import BadVersionError, NoNodeError
 
 LOCK_ROOT = "/locks"
 DEFAULT_HOSTS = "127.0.0.1:2181,127.0.0.1:2182,127.0.0.1:2183"
-
+LOCK_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]+/lock-[0-9]{10}")
 
 def connect(hosts=None):
     """Open a ZooKeeper session. Any of the listed copies can answer."""
@@ -98,6 +99,8 @@ def start_lease(client, path):
     data, stat = read_lock(client, path)
     if data is None:
         return None
+    if data["expires_at"] is not None:
+        return data["expires_at"]  # A retried Acquire already started it.    
     data["expires_at"] = now_ms() + data["lease_ms"]
     client.set(path, json.dumps(data).encode(), version=stat.version)
     return data["expires_at"]
@@ -138,7 +141,8 @@ def validate(client, path, owner_id, token):
         return False, "STALE_FENCING_TOKEN"
     return True, ""
 
-
+#“The reaper’s delete is conditional on the znode version, 
+# so a renewal that lands between its read and its delete makes the delete fail, and a live lease is never reaped.”
 def reap_expired(client):
     """Delete every lock whose lease ran out. Return how many were deleted."""
     reaped = 0
@@ -160,3 +164,31 @@ def reap_expired(client):
             except (NoNodeError, BadVersionError):
                 pass
     return reaped
+
+def lock_id_for(path):
+    """Turn a znode path into the lock_id we give to callers."""
+    return path[len(LOCK_ROOT) + 1:]
+
+
+def path_for(lock_id):
+    """Turn a lock_id back into a znode path. Return None if it looks wrong."""
+    if not LOCK_ID_PATTERN.fullmatch(lock_id):
+        return None
+    return f"{LOCK_ROOT}/{lock_id}"
+
+
+def find_request(client, pool_id, owner_id, acquire_id):
+    """Find a live earlier attempt of this same Acquire. Return its path or None."""
+    try:
+        names = queue(client, pool_id)
+    except NoNodeError:
+        return None
+
+    for name in names:
+        path = f"{LOCK_ROOT}/{pool_id}/{name}"
+        data, _ = read_lock(client, path)
+        if data is None or data["acquire_id"] != acquire_id or data["owner_id"] != owner_id:
+            continue
+        if data["expires_at"] is None or data["expires_at"] > now_ms():
+            return path
+    return None
