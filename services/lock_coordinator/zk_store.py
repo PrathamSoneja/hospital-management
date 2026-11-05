@@ -5,7 +5,7 @@ import threading
 import time
 
 from kazoo.client import KazooClient
-from kazoo.exceptions import NoNodeError
+from kazoo.exceptions import BadVersionError, NoNodeError
 
 LOCK_ROOT = "/locks"
 DEFAULT_HOSTS = "127.0.0.1:2181,127.0.0.1:2182,127.0.0.1:2183"
@@ -44,7 +44,8 @@ def fencing_token(client, path):
     """Return the znode's czxid, which is the lock's fencing token."""
     _, stat = client.get(path)
     return stat.czxid
-
+#wait_for_turn avoids "herd effect", where every request floods zookeeper.
+#instead, here, a request only looks at the the one ahead of it in line and zookeeper taps on its shoulder when the one ahead is done.
 def wait_for_turn(client, pool_id, path, timeout_s):
     """Wait until this request is first in line. Return False if time runs out."""
     my_name = path.rsplit("/", 1)[-1]
@@ -77,3 +78,85 @@ def leave_queue(client, path):
         client.delete(path)
     except NoNodeError:
         pass
+
+def now_ms():
+    """Return the current time in epoch milliseconds."""
+    return int(time.time() * 1000)
+
+
+def read_lock(client, path):
+    """Return the lock's data and stat, or (None, None) if it is gone."""
+    try:
+        raw, stat = client.get(path)
+    except NoNodeError:
+        return None, None
+    return json.loads(raw), stat
+
+
+def start_lease(client, path):
+    """Start the timer once a request gets the key. Return expires_at."""
+    data, stat = read_lock(client, path)
+    if data is None:
+        return None
+    data["expires_at"] = now_ms() + data["lease_ms"]
+    client.set(path, json.dumps(data).encode(), version=stat.version)
+    return data["expires_at"]
+
+
+def renew_lease(client, path, owner_id, lease_ms):
+    """Extend a live lease. Return the new expires_at, or None if refused."""
+    data, stat = read_lock(client, path)
+    if data is None or data["owner_id"] != owner_id:
+        return None
+    if data["expires_at"] is None or data["expires_at"] <= now_ms():
+        return None
+    data["expires_at"] = now_ms() + lease_ms
+    try:
+        client.set(path, json.dumps(data).encode(), version=stat.version)
+    except (NoNodeError, BadVersionError):
+        return None
+    return data["expires_at"]
+
+
+def release(client, path, owner_id):
+    """Give the key back. Only its owner can do this."""
+    data, _ = read_lock(client, path)
+    if data is None or data["owner_id"] != owner_id:
+        return False
+    leave_queue(client, path)
+    return True
+
+
+def validate(client, path, owner_id, token):
+    """Check a lease is still good. Return (valid, reason)."""
+    data, stat = read_lock(client, path)
+    if data is None or data["expires_at"] is None or data["expires_at"] <= now_ms():
+        return False, "LEASE_NOT_HELD"
+    if data["owner_id"] != owner_id:
+        return False, "NOT_OWNER"
+    if stat.czxid != token:
+        return False, "STALE_FENCING_TOKEN"
+    return True, ""
+
+
+def reap_expired(client):
+    """Delete every lock whose lease ran out. Return how many were deleted."""
+    reaped = 0
+    try:
+        pools = client.get_children(LOCK_ROOT)
+    except NoNodeError:
+        return 0
+
+    for pool_id in pools:
+        for name in client.get_children(f"{LOCK_ROOT}/{pool_id}"):
+            path = f"{LOCK_ROOT}/{pool_id}/{name}"
+            data, stat = read_lock(client, path)
+            if data is None or data["expires_at"] is None or data["expires_at"] > now_ms():
+                continue
+            try:
+                # The version check means a renew that got in first wins.
+                client.delete(path, version=stat.version)
+                reaped += 1
+            except (NoNodeError, BadVersionError):
+                pass
+    return reaped
