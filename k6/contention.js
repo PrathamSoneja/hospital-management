@@ -13,7 +13,9 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Counter } from 'k6/metrics';
 
-const baseUrl = (__ENV.BASE_URL || '').replace(/\/$/, '');
+// BASE_URLS (comma-separated) spreads requests across allocator replicas; BASE_URL is a single target.
+const baseUrls = (__ENV.BASE_URLS || __ENV.BASE_URL || '').split(',').map((u) => u.trim().replace(/\/$/, '')).filter(Boolean);
+const baseUrl = baseUrls[0] || '';
 const mode = __ENV.MODE || 'distinct';
 const poolId = __ENV.POOL_ID || '';
 const admissions = Number(__ENV.ADMISSIONS || 50);
@@ -23,7 +25,7 @@ const runId = __ENV.RUN_ID || `${Date.now()}`;
 const settleSeconds = Number(__ENV.SETTLE_SECONDS || 120);
 
 if (!baseUrl || !poolId || (mode === 'same-admission' && !__ENV.ADMISSION_ID)) {
-  throw new Error('Set BASE_URL and POOL_ID (and ADMISSION_ID for same-admission) to disposable targets');
+  throw new Error('Set BASE_URL(S) and POOL_ID (and ADMISSION_ID for same-admission) to disposable targets');
 }
 
 const settleViolations = new Counter('settle_violations');
@@ -35,7 +37,9 @@ export const options = {
   thresholds: {
     checks: ['rate>0.99'],
     settle_violations: ['count==0'],
-    http_req_duration: ['p(95)<3000'],
+    // Single-pool contention serializes on the pool lock: requests waiting past LOCK_WAIT_TIMEOUT_MS
+    // return 202 and finish through recovery, so the latency bound is a parameter, not a fixed 3 s.
+    http_req_duration: [`p(95)<${Number(__ENV.P95_THRESHOLD_MS || 3000)}`],
   },
   teardownTimeout: `${settleSeconds + 30}s`,
 };
@@ -48,7 +52,8 @@ export default function () {
   const requestId = `k6-${runId}-${__VU}-${__ITER}`;
   const admissionId = mode === 'distinct' ? `${prefix}-${__VU}` : __ENV.ADMISSION_ID;
   const key = mode === 'distinct' ? `k6-${runId}-${admissionId}` : `k6-${runId}-${requestId}`;
-  const response = http.post(`${baseUrl}/api/v1/allocations`,
+  const target = baseUrls[(__VU + __ITER) % baseUrls.length];
+  const response = http.post(`${target}/api/v1/allocations`,
     JSON.stringify({ admission_id: admissionId, pool_id: poolId }), { headers: headers(requestId, key) });
   const accepted = mode === 'distinct' ? [201, 202] : [201, 202, 409];
   check(response, { 'allocation accepted (or conflict for same admission)': (r) => accepted.includes(r.status) });
