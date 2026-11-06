@@ -37,7 +37,9 @@ export const options = {
   thresholds: {
     'checks{kind:write}': ['rate>0.98'],
     'checks{kind:read}': ['rate>0.99'],
-    http_req_duration: ['p(95)<3000'],
+    // Environment-dependent: per-pool lock serialization on local emulators is far slower than the
+    // managed services, so local runs pass an explicit bound; the default is the staging target.
+    http_req_duration: [`p(95)<${Number(__ENV.P95_THRESHOLD_MS || 3000)}`],
   },
 };
 

@@ -195,14 +195,15 @@ def load(sustained_duration: str, vus: int) -> int:
                                   "duration": sustained_duration, "vus": vus})
         code = _k6("sustained-multi-pool.js", {"ALLOCATION_URLS": targets, "TRIAGE_URL": "http://host.docker.internal:47101",
                                                "POOL_IDS": ",".join(pools), "ADMISSIONS_PER_POOL": 2000, "VUS": vus,
-                                               "RAMP": "15s", "DURATION": sustained_duration},
+                                               "RAMP": "15s", "DURATION": sustained_duration,
+                                               "P95_THRESHOLD_MS": 8000},  # local emulators; staging target stays 3000
                    out / "k6-sustained-summary.json", out / "k6-sustained.log")
         report = _settle(sandbox, pools)
         (out / "audit-sustained.json").write_text(json.dumps(report, indent=2, default=str))
         if code or report["violations"]:
             failures.append(f"sustained: k6_exit={code} violations={report['violations']}")
         manifest["steps"][-1].update(k6_exit=code, statuses=report["statuses"], violations=report["violations"],
-                                     outbox_streams=len(report["outbox_streams"]))
+                                     outbox_streams=len(report["outbox_streams"]), p95_threshold_ms=8000)
         time.sleep(12)  # at least two Prometheus scrapes after the run
         manifest["observability"] = _observability(sandbox, out)
         (out / "dependencies-state-summary.json").write_text(json.dumps(
