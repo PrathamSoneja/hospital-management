@@ -18,6 +18,7 @@ jobs:
       FIRESTORE_EMULATOR_HOST: localhost:8080
       # Any skipped integration test fails the job instead of passing silently.
       REQUIRE_INTEGRATION: '1'
+      ZK_TEST_HOSTS: localhost:2181
     services:
       postgres:
         image: postgres:16-alpine
@@ -29,6 +30,9 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
+      zookeeper:
+        image: zookeeper:3.9
+        ports: ['2181:2181']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
