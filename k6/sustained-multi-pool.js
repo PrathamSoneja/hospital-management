@@ -47,6 +47,17 @@ function headers(requestId, key) {
   return result;
 }
 
+// Retryable responses (503/504, e.g. a pool-lock wait timeout) are retried with the SAME
+// Idempotency-Key, as a correct client would; only the final outcome is checked.
+function withRetry(send) {
+  let response = send();
+  for (let attempt = 1; attempt < 4 && [503, 504].includes(response.status); attempt += 1) {
+    sleep(0.25 * 2 ** attempt);
+    response = send();
+  }
+  return response;
+}
+
 export default function () {
   const sequence = exec.scenario.iterationInTest;
   const poolId = poolIds[sequence % poolIds.length];
@@ -59,15 +70,17 @@ export default function () {
   const allocationUrl = allocationUrls[sequence % allocationUrls.length];
 
   if (n <= perPool) {
-    const triage = http.put(`${triageUrl}/api/v1/triage/${admissionId}`,
+    const triage = withRetry(() => http.put(`${triageUrl}/api/v1/triage/${admissionId}`,
       JSON.stringify({ triage_level: 1 + (n % 5), pool_id: poolId }),
-      { headers: headers(`${requestId}-t`, `k6-${runId}-triage-${admissionId}`), tags: { kind: 'write' } });
-    check(triage, { 'triage PUT ok': (r) => r.status === 200 }, { kind: 'write' });
+      { headers: headers(`${requestId}-t`, `k6-${runId}-triage-${admissionId}`), tags: { kind: 'write' } }));
+    const triaged = check(triage, { 'triage PUT ok': (r) => r.status === 200 }, { kind: 'write' });
 
-    const created = http.post(`${allocationUrl}/api/v1/allocations`,
-      JSON.stringify({ admission_id: admissionId, pool_id: poolId }),
-      { headers: headers(`${requestId}-a`, `k6-${runId}-alloc-${admissionId}`), tags: { kind: 'write' } });
-    check(created, { 'allocation accepted': (r) => [201, 202].includes(r.status) }, { kind: 'write' });
+    if (triaged) {  // an untriaged admission is correctly refused by Allocation; do not count that twice
+      const created = withRetry(() => http.post(`${allocationUrl}/api/v1/allocations`,
+        JSON.stringify({ admission_id: admissionId, pool_id: poolId }),
+        { headers: headers(`${requestId}-a`, `k6-${runId}-alloc-${admissionId}`), tags: { kind: 'write' } }));
+      check(created, { 'allocation accepted': (r) => [201, 202].includes(r.status) }, { kind: 'write' });
+    }
 
     // Discharge an existing occupant every other iteration, so beds fill, waitlists form, and
     // releases promote waiting admissions. A concurrent discharge of the same occupant by another
@@ -78,9 +91,9 @@ export default function () {
       const items = occupied.status === 200 ? occupied.json('items') : [];
       if (items.length) {
         const allocationId = items[sequence % items.length].allocation_id;
-        const released = http.post(`${allocationUrl}/api/v1/allocations/${allocationId}/release`,
+        const released = withRetry(() => http.post(`${allocationUrl}/api/v1/allocations/${allocationId}/release`,
           JSON.stringify({ reason: 'k6-discharge' }),
-          { headers: headers(`${requestId}-r`, `k6-${runId}-release-${allocationId}`), tags: { kind: 'write' } });
+          { headers: headers(`${requestId}-r`, `k6-${runId}-release-${allocationId}`), tags: { kind: 'write' } }));
         check(released, { 'release accepted or already released': (r) => [200, 202, 409].includes(r.status) }, { kind: 'write' });
       }
     }
