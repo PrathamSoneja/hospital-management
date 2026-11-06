@@ -51,6 +51,9 @@ jobs:
           python -m openapi_spec_validator contracts/openapi/patient-registry-admissions.openapi.yaml
           python scripts/compile_proto.py
           git diff --exit-code -- shared/generated
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.5"
       - name: Validate infrastructure and local Compose
         run: |
           terraform fmt -check -recursive infra/terraform
