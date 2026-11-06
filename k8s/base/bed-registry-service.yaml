@@ -18,3 +18,13 @@ spec:
       port: 50053
       targetPort: 50053
       protocol: TCP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: bed-registry-sa
+  labels:
+    app.kubernetes.io/name: bed-registry-service
+    app.kubernetes.io/part-of: hospital-bed-management
+  annotations:
+    iam.gke.io/gcp-service-account: set-by-overlay

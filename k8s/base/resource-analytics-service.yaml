@@ -14,3 +14,13 @@ spec:
       port: 8008
       targetPort: 8008
       protocol: TCP
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: resource-analytics-sa
+  labels:
+    app.kubernetes.io/name: resource-analytics-service
+    app.kubernetes.io/part-of: hospital-bed-management
+  annotations:
+    iam.gke.io/gcp-service-account: set-by-overlay
