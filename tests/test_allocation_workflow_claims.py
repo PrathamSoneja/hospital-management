@@ -193,3 +193,77 @@ def test_stale_promotion_runner_cannot_resurrect_a_released_candidate(pg_session
     assert service.get_allocation(candidate.allocation_id).status == "RELEASED"
     assert service.get_allocation(occupant.allocation_id).pending_action is None
     assert beds.beds["bed-1"].status == "AVAILABLE"
+
+
+class FlakyLockClient(InProcessLockClient):
+    def __init__(self, coordinator):
+        super().__init__(coordinator)
+        self.fail_next_acquire = False
+
+    def acquire(self, *args, **kwargs):
+        if self.fail_next_acquire:
+            self.fail_next_acquire = False
+            raise AppException("DEADLINE_EXCEEDED", "lock wait timed out", 504, retryable=True)
+        return super().acquire(*args, **kwargs)
+
+
+def _pool_service(sessions, admissions, beds=1, triage_cls=DirectTriageClient):
+    patients = FakePatientRegistryClient()
+    triage_domain = TriageDomainService(InMemoryTriageRepository(), MockFencingValidator(True))
+    for admission, level in admissions.items():
+        patients.seed_admission(admission, f"pat-{admission}", "OPEN")
+        triage_domain.set_triage(admission, level, "POOL-A")
+    bed_client = FakeBedRegistryClient()
+    for n in range(1, beds + 1):
+        bed_client.seed_bed(f"bed-{n}", "POOL-A", ward="WARD-NORTH")
+    lock = FlakyLockClient(StatefulLockCoordinator())
+    triage = triage_cls(triage_domain)
+    service = BedAllocationDomainService(
+        session_factory=sessions, patient_client=patients, triage_client=triage, lock_client=lock,
+        bed_client=bed_client, staff_client=FakeStaffSchedulerClient(initial_capacity=10), owner_id="r1")
+    return service, triage, triage_domain, lock, bed_client
+
+
+def test_lock_timeout_during_recovery_keeps_the_outstanding_enqueue(pg_sessions):
+    """Regression from the fresh-clone load run: resetting to CHECK_PRIORITY orphaned a committed entry."""
+    service, triage, _, lock, beds = _pool_service(pg_sessions, {"adm-1": 1, "adm-2": 1}, triage_cls=LostEnqueueAckTriage)
+    occupant = service.create_allocation(CreateAllocationRequest(admission_id="adm-1", pool_id="POOL-A"), "r1", "k1")
+    triage.drop_next_enqueue_ack = True
+    waiting = service.create_allocation(CreateAllocationRequest(admission_id="adm-2", pool_id="POOL-A"), "r2", "k2")
+    assert waiting.pending_action == "ENQUEUE_WAITLIST"
+
+    _expire_claims(pg_sessions)
+    lock.fail_next_acquire = True  # the recovery attempt cannot get the pool lock
+    service.recover_pending()
+    assert service.get_allocation(waiting.allocation_id).pending_action == "ENQUEUE_WAITLIST"
+
+    beds.beds["bed-1"].status = "AVAILABLE"  # even if capacity appears, the committed enqueue is honoured
+    _expire_claims(pg_sessions)
+    service.recover_pending()
+    settled = service.get_allocation(waiting.allocation_id)
+    assert (settled.status, settled.pending_action) == ("WAITLISTED", None)
+    assert triage.peek_next("POOL-A", "r").allocation_id == waiting.allocation_id
+    assert occupant.status == "ALLOCATED"
+
+
+def test_promotion_removes_an_orphaned_head_entry_and_promotes_the_next(pg_sessions):
+    service, triage, triage_domain, lock, beds = _pool_service(pg_sessions, {"adm-1": 3, "adm-2": 3, "adm-3": 2}, beds=2)
+    first = service.create_allocation(CreateAllocationRequest(admission_id="adm-1", pool_id="POOL-A"), "r1", "k1")
+    orphan = service.create_allocation(CreateAllocationRequest(admission_id="adm-2", pool_id="POOL-A"), "r2", "k2")
+    waiting = service.create_allocation(CreateAllocationRequest(admission_id="adm-3", pool_id="POOL-A"), "r3", "k3")
+    assert (first.status, orphan.status, waiting.status) == ("ALLOCATED", "ALLOCATED", "WAITLISTED")
+    # Simulate the residue of a lost enqueue acknowledgement: a queue entry for an allocated admission.
+    lease = lock.acquire("POOL-A", "test", "acq-orphan", 5000, 1000)
+    triage_domain.set_triage("adm-2", 1, "POOL-A")
+    triage.enqueue(service._promotion_context("orphan-enqueue", "r", lease), orphan.allocation_id, "adm-2")
+    lock.release(lease.lock_id, lease.owner_id)
+    assert triage.peek_next("POOL-A", "r").allocation_id == orphan.allocation_id
+
+    service.release_allocation(orphan.allocation_id, "discharged", "r4", "k4")  # head is now orphaned
+    for _ in range(3):
+        _expire_claims(pg_sessions)
+        service.recover_pending()
+    promoted = service.get_allocation(waiting.allocation_id)
+    assert (promoted.status, promoted.pending_action) == ("ALLOCATED", None)
+    assert service.get_allocation(orphan.allocation_id).status == "RELEASED"
+    assert triage.peek_next("POOL-A", "r") is None

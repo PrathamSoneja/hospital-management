@@ -458,8 +458,10 @@ class BedAllocationDomainService:
                 wait_timeout_ms=self.lock_wait_timeout_ms,
             )
         except Exception as error:
+            # Keep the action in progress: resetting to CHECK_PRIORITY would forget an outstanding
+            # step (e.g. an enqueue whose outcome is unknown) and could orphan its queue entry.
             return self._mark_recovering(
-                allocation_id, "CHECK_PRIORITY", f"{allocation_id}:acquire-lock", "ACQUIRE_LOCK", error
+                allocation_id, action, f"{allocation_id}:acquire-lock", "ACQUIRE_LOCK", error
             )
         # One observation per acquisition: the Coordinator-reported queue wait, not RPC or patient wait.
         lock_wait_ms = max(0, int(lease.lock_wait_ms))
@@ -939,10 +941,16 @@ class BedAllocationDomainService:
         return MutationContext(operation_id=operation_id, request_id=request_id, pool_id=lease.pool_id,
             lock_id=lease.lock_id, owner_id=lease.owner_id, fencing_token=lease.fencing_token)
 
-    def _promotion_candidate_settled(self, candidate_id) -> bool:
+    def _promotion_candidate_state(self, candidate_id) -> str:
+        """WAITLISTED (promotable), UNRESOLVED (create/cancel in flight or unknown row), or ORPHANED."""
         with self.session_factory() as session:
             candidate = session.query(AllocationModel).filter_by(allocation_id=candidate_id).first()
-            return bool(candidate and candidate.status == "WAITLISTED" and not candidate.pending_action)
+            if candidate is None or candidate.status in ("PROCESSING", "RECOVERING", "CANCELLING"):
+                return "UNRESOLVED"
+            if candidate.status == "WAITLISTED":
+                return "UNRESOLVED" if candidate.pending_action else "WAITLISTED"
+            # ALLOCATED/RELEASING/RELEASED/CANCELLED/FAILED never legitimately keep a queue entry.
+            return "ORPHANED"
 
     def _defer_promotion(self, allocation_id):
         with self.session_factory() as session:
@@ -1044,11 +1052,25 @@ class BedAllocationDomainService:
             current = self.triage_client.peek_next(lease.pool_id, request_id)
             if not current or current.allocation_id != candidate_id:
                 return None
-            if not self._promotion_candidate_settled(candidate_id):
-                # The queue head's own create workflow is unresolved (for example an enqueue whose
-                # outcome was unknown but committed). Promoting now would race that recovery, which
-                # could later finalize it as WAITLISTED and strand the bed. Keep the durable PROMOTE
-                # action and retry once the candidate has settled.
+            candidate_state = self._promotion_candidate_state(candidate_id)
+            if candidate_state == "ORPHANED":
+                # The head entry belongs to an allocation that already moved past waitlisting (its
+                # create finished another way after an enqueue whose acknowledgement was lost).
+                # Remove our own stale entry with a stable operation ID, then retry with the next head.
+                orphan_op = f"{candidate_id}:remove-orphaned-entry"
+                self._record_step(allocation_id, "PROMOTE", orphan_op, "REMOVE_ORPHANED_ENTRY", "INTENDED",
+                                  {"candidate_id": candidate_id}, "RELEASED")
+                if not self.triage_client.remove_entry(self._promotion_context(orphan_op, request_id, lease),
+                                                       candidate_id, "orphaned"):
+                    raise RuntimeError("Orphaned queue entry removal was not confirmed")
+                self._record_step(allocation_id, "PROMOTE", orphan_op, "REMOVE_ORPHANED_ENTRY", "SUCCEEDED",
+                                  {"candidate_id": candidate_id}, "RELEASED")
+                self._defer_promotion(allocation_id)
+                return None
+            if candidate_state != "WAITLISTED":
+                # The queue head's own create (or cancel) is unresolved, e.g. an enqueue whose outcome
+                # was unknown but committed. Promoting now would race that recovery, which could later
+                # finalize it as WAITLISTED and strand the bed. Keep the durable PROMOTE and retry.
                 self._defer_promotion(allocation_id)
                 return None
 
