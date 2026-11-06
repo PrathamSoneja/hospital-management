@@ -143,6 +143,7 @@ class BedAllocationDomainService:
         owner_id: str = "bed-alloc-instance-1",
         lock_lease_ms: int = 10000,
         lock_wait_timeout_ms: int = 5000,
+        recovery_claim_seconds: int = 60,
     ):
         self.session_factory = session_factory
         self.patient_client = patient_client
@@ -153,6 +154,8 @@ class BedAllocationDomainService:
         self.owner_id = owner_id
         self.lock_lease_ms = lock_lease_ms
         self.lock_wait_timeout_ms = lock_wait_timeout_ms
+        # How long a request/recovery claim stays exclusive; must exceed the longest workflow step.
+        self.recovery_claim_seconds = recovery_claim_seconds
 
     def _hash_payload(self, payload: dict) -> str:
         serialized = json.dumps(payload, sort_keys=True)
@@ -247,7 +250,7 @@ class BedAllocationDomainService:
             allocation.status = allocation_status
             allocation.pending_action = action
             allocation.recovery_claim_owner = self.owner_id
-            allocation.recovery_claim_until = now + timedelta(seconds=60)
+            allocation.recovery_claim_until = now + timedelta(seconds=self.recovery_claim_seconds)
             allocation.updated_at = now
             operation = session.query(OperationRecoveryModel).filter_by(operation_id=operation_id).first()
             if operation is None:
@@ -358,7 +361,7 @@ class BedAllocationDomainService:
                 pending_action="CHECK_PRIORITY",
                 workflow_data=json.dumps({"patient_id": adm.patient_id}),
                 recovery_claim_owner=claim_owner,
-                recovery_claim_until=datetime.now(timezone.utc) + timedelta(seconds=60),
+                recovery_claim_until=datetime.now(timezone.utc) + timedelta(seconds=self.recovery_claim_seconds),
             )
             try:
                 if idempotency_key:
@@ -443,7 +446,7 @@ class BedAllocationDomainService:
             action = record.pending_action or "FINALIZE_CREATE"
             record.status = "PROCESSING"
             record.recovery_claim_owner = self.owner_id
-            record.recovery_claim_until = datetime.now(timezone.utc) + timedelta(seconds=60)
+            record.recovery_claim_until = datetime.now(timezone.utc) + timedelta(seconds=self.recovery_claim_seconds)
             session.commit()
 
         try:
@@ -694,8 +697,9 @@ class BedAllocationDomainService:
             allocation_id, request_id, idempotency_key, request_payload, final_status, lock_wait_ms, started_at
         )
 
-    def recover_pending(self, batch_size: int = 20, lease_seconds: int = 60) -> int:
+    def recover_pending(self, batch_size: int = 20, lease_seconds: Optional[int] = None) -> int:
         """Claim expired Allocation workflows and resume them with stable operation IDs."""
+        lease_seconds = lease_seconds or self.recovery_claim_seconds
         now = datetime.now(timezone.utc)
         worker_id = f"{self.owner_id}:recovery:{uuid.uuid4().hex}"
         with self.session_factory() as session:
@@ -835,7 +839,7 @@ class BedAllocationDomainService:
             identity = {name: prior[name] for name in ("patient_id", "ward") if name in prior}
             record.workflow_data = json.dumps({**identity, **workflow})
             record.recovery_claim_owner = self.owner_id
-            record.recovery_claim_until = datetime.now(timezone.utc) + timedelta(seconds=60)
+            record.recovery_claim_until = datetime.now(timezone.utc) + timedelta(seconds=self.recovery_claim_seconds)
             record.updated_at = datetime.now(timezone.utc)
             if key:
                 claim = session.query(IdempotencyModel).filter_by(**scope, idempotency_key=key).first()
