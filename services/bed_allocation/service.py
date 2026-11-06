@@ -735,6 +735,12 @@ class BedAllocationDomainService:
                 record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
                 if not record or record.pending_action is None:
                     continue
+                claim_until = record.recovery_claim_until
+                if claim_until is not None and claim_until.tzinfo is None:
+                    claim_until = claim_until.replace(tzinfo=timezone.utc)
+                if record.recovery_claim_owner != worker_id or not claim_until or claim_until <= datetime.now(timezone.utc):
+                    # Earlier rows in this batch outlasted our claim and another worker took it over.
+                    continue
                 data = json.loads(record.workflow_data or "{}")
                 action = data.get("action", "CREATE")
                 pending_action = record.pending_action
@@ -792,6 +798,10 @@ class BedAllocationDomainService:
     ) -> AllocationResponse:
         with self.session_factory() as session:
             record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).with_for_update().first()
+            if record.status not in ("PROCESSING", "RECOVERING"):
+                # Already settled by another path (for example a promotion); never overwrite it.
+                session.rollback()
+                return self._allocation_snapshot(allocation_id)
             now = datetime.now(timezone.utc)
             allocated = final_status == "ALLOCATED"
             _append_outbox_events(
@@ -929,6 +939,24 @@ class BedAllocationDomainService:
         return MutationContext(operation_id=operation_id, request_id=request_id, pool_id=lease.pool_id,
             lock_id=lease.lock_id, owner_id=lease.owner_id, fencing_token=lease.fencing_token)
 
+    def _promotion_candidate_settled(self, candidate_id) -> bool:
+        with self.session_factory() as session:
+            candidate = session.query(AllocationModel).filter_by(allocation_id=candidate_id).first()
+            return bool(candidate and candidate.status == "WAITLISTED" and not candidate.pending_action)
+
+    def _defer_promotion(self, allocation_id):
+        with self.session_factory() as session:
+            record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).with_for_update().first()
+            data = json.loads(record.workflow_data or "{}")
+            data.pop("promotion_target", None)  # re-read the queue head on the next attempt
+            data["stage"] = "PROMOTE"
+            record.workflow_data = json.dumps(data)
+            record.status = "RELEASED"
+            record.pending_action = "PROMOTE"
+            record.recovery_claim_owner = None
+            record.recovery_claim_until = datetime.now(timezone.utc)
+            session.commit()
+
     def _promote_next_locked(self, allocation_id, lease, request_id, report_lock_wait=True):
         """Attempt one priority-ordered promotion while holding the already acquired pool lease."""
         with self.session_factory() as session:
@@ -995,13 +1023,16 @@ class BedAllocationDomainService:
             details = staff_result["details"] if staff_result else {}
             with self.session_factory() as session:
                 candidate = session.query(AllocationModel).filter_by(allocation_id=candidate_id).with_for_update().first()
-                if candidate:
+                release_record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).with_for_update().first()
+                if release_record.pending_action != "PROMOTE":
+                    session.rollback()  # a concurrent runner already completed this promotion
+                    return candidate_id
+                if candidate and candidate.status == "WAITLISTED":  # only WAITLISTED -> ALLOCATED, never resurrect
                     candidate.status = "ALLOCATED"
                     candidate.bed_id = details.get("bed_id", candidate.bed_id)
                     candidate.staff_assignment_id = details.get("staff_assignment_id", candidate.staff_assignment_id)
                     candidate.waitlist_entry_id = None
                     self._record_promotion_events(session, candidate, details.get("ward"), lease, request_id, report_lock_wait)
-                release_record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
                 release_record.pending_action = None
                 release_record.recovery_claim_owner = None
                 release_record.recovery_claim_until = None
@@ -1012,6 +1043,13 @@ class BedAllocationDomainService:
         if not existing_effect:
             current = self.triage_client.peek_next(lease.pool_id, request_id)
             if not current or current.allocation_id != candidate_id:
+                return None
+            if not self._promotion_candidate_settled(candidate_id):
+                # The queue head's own create workflow is unresolved (for example an enqueue whose
+                # outcome was unknown but committed). Promoting now would race that recovery, which
+                # could later finalize it as WAITLISTED and strand the bed. Keep the durable PROMOTE
+                # action and retry once the candidate has settled.
+                self._defer_promotion(allocation_id)
                 return None
 
         prior_bed = self._read_operation(bed_op)
@@ -1076,14 +1114,17 @@ class BedAllocationDomainService:
             self._record_step(allocation_id, "PROMOTE", f"{candidate_id}:promotion-confirmed", "PROMOTION_CONFIRMED", "SUCCEEDED", {"candidate_id": candidate_id, "bed_id": target_bed.bed_id, "ward": target_ward, "staff_assignment_id": assignment_id}, "RELEASED")
             with self.session_factory() as session:
                 candidate = session.query(AllocationModel).filter_by(allocation_id=candidate_id).with_for_update().first()
-                if candidate:
+                released_record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).with_for_update().first()
+                if released_record.pending_action != "PROMOTE":
+                    session.rollback()  # a concurrent runner already completed this promotion
+                    return candidate_id
+                if candidate and candidate.status == "WAITLISTED":  # only WAITLISTED -> ALLOCATED, never resurrect
                     candidate.status = "ALLOCATED"
                     candidate.bed_id = target_bed.bed_id
                     candidate.staff_assignment_id = assignment_id
                     candidate.waitlist_entry_id = None
                     candidate.updated_at = datetime.now(timezone.utc)
                     self._record_promotion_events(session, candidate, target_ward, lease, request_id, report_lock_wait)
-                released_record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
                 released_record.pending_action = None
                 released_record.recovery_claim_owner = None
                 released_record.recovery_claim_until = None
