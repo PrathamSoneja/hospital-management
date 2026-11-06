@@ -267,3 +267,20 @@ def test_promotion_removes_an_orphaned_head_entry_and_promotes_the_next(pg_sessi
     assert (promoted.status, promoted.pending_action) == ("ALLOCATED", None)
     assert service.get_allocation(orphan.allocation_id).status == "RELEASED"
     assert triage.peek_next("POOL-A", "r") is None
+
+
+def test_deferred_promotion_backs_off_without_taking_the_pool_lock(pg_sessions):
+    """Regression from the second rehearsal: deferring releases monopolized the pool lock."""
+    service, triage, _, lock, _ = _pool_service(pg_sessions, {"adm-1": 1, "adm-2": 1}, triage_cls=LostEnqueueAckTriage)
+    occupant = service.create_allocation(CreateAllocationRequest(admission_id="adm-1", pool_id="POOL-A"), "r1", "k1")
+    triage.drop_next_enqueue_ack = True
+    service.create_allocation(CreateAllocationRequest(admission_id="adm-2", pool_id="POOL-A"), "r2", "k2")
+    service.release_allocation(occupant.allocation_id, "discharged", "r3", "k3")  # defers behind the unresolved head
+
+    acquisitions = lock.coordinator.acquisitions
+    service._resume_promotion(occupant.allocation_id, "r4")
+    assert lock.coordinator.acquisitions == acquisitions  # pre-check only; no pool lock taken
+    with pg_sessions() as session:
+        row = session.query(AllocationModel).filter_by(allocation_id=occupant.allocation_id).one()
+        retry_at = row.recovery_claim_until if row.recovery_claim_until.tzinfo else row.recovery_claim_until.replace(tzinfo=timezone.utc)
+        assert row.pending_action == "PROMOTE" and retry_at > datetime.now(timezone.utc) + timedelta(seconds=5)
