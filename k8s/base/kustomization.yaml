@@ -13,5 +13,9 @@ resources:
   - triage-deployment.yaml
   - triage-service.yaml
   - triage-hpa.yaml
+  - bed-registry-deployment.yaml
+  - bed-registry-service.yaml
+  - resource-analytics-deployment.yaml
+  - resource-analytics-service.yaml
   - pod-disruption-budgets.yaml
   - network-policies.yaml
