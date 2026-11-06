@@ -91,7 +91,7 @@ jobs:
           docker build -f services/patient_registry/Dockerfile -t hospital-patient-registry:ci .
           # hospital_migration_empty_test is left at head by tests/test_migrations_postgres.py
           python scripts/smoke_image.py hospital-bed-allocation:ci \
-            --database-url postgresql+psycopg2://postgres:sandbox-only@localhost:45432/hospital_migration_empty_test
+            --database-url postgresql+psycopg2://postgres:sandbox-only@127.0.0.1:45432/hospital_migration_empty_test
           python scripts/smoke_image.py hospital-triage:ci --service triage --firestore localhost:48080 --port 18003
 
       - name: Upload test, load, and validation evidence

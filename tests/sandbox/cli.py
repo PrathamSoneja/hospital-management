@@ -30,7 +30,7 @@ K6_IMAGE = "grafana/k6:0.54.0"
 PORTS = {"deps_grpc": 47051, "deps_http": 47080, "triage_rest": 47101, "triage_grpc": 47151,
          "allocator_0": 47201, "allocator_1": 47202}
 ENV = {  # sandbox Compose endpoints (tests/sandbox/compose.yaml)
-    "TEST_POSTGRES_URL": "postgresql+psycopg2://postgres:sandbox-only@localhost:45432/hospital_allocation_unit_test",
+    "TEST_POSTGRES_URL": "postgresql+psycopg2://postgres:sandbox-only@127.0.0.1:45432/hospital_allocation_unit_test",
     "FIRESTORE_EMULATOR_HOST": "localhost:48080",
     "PUBSUB_EMULATOR_HOST": "localhost:48085",
     "SANDBOX_KAFKA_BOOTSTRAP": "localhost:49092",
