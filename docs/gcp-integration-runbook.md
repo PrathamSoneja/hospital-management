@@ -164,6 +164,10 @@ revision or revert the digest commit.
 
 ## 9. Real teammate endpoints
 
+Before wiring an endpoint, run the dependency contract checks against it (read-only unless
+`ACCEPTANCE_ALLOW_MUTATION=1` with designated test resources): see `docs/precloud-status.md`,
+"Replacing stand-ins". Before any ArgoCD sync, `python scripts/check_release_config.py` must exit 0.
+
 Fill `k8s/overlays/staging/allocation.properties` and `triage.properties` with the owners' in-cluster
 addresses (`LOCK_SERVICE_ADDR`, `BED_SERVICE_ADDR`, `STAFF_SERVICE_ADDR`, `PATIENT_SERVICE_URL`,
 `LOCK_COORDINATOR_ADDR`). The services refuse to start in `staging`/`production` with empty, loopback,

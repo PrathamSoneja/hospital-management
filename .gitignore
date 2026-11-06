@@ -92,3 +92,4 @@ tfplan.txt
 
 # Local sandbox runtime state, logs, and load evidence (tests/sandbox)
 /.sandbox/
+!docs/precloud-status.md
