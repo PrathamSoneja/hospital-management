@@ -780,6 +780,14 @@ class BedAllocationDomainService:
         with self.session_factory() as session:
             record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
             pool_id = record.pool_id
+            started_target = json.loads(record.workflow_data or "{}").get("promotion_target")
+        if not started_target:
+            # Cheap pre-check without the pool lock: while the queue head's own create is unresolved,
+            # back off instead of repeatedly taking the lock (which would starve that very recovery).
+            head = self.triage_client.peek_next(pool_id, request_id)
+            if head and self._promotion_candidate_state(head.allocation_id) == "UNRESOLVED":
+                self._defer_promotion(allocation_id)
+                return
         try:
             lease = self.lock_client.acquire(pool_id, self.owner_id, f"acq-promotion-{uuid.uuid4().hex}", self.lock_lease_ms, self.lock_wait_timeout_ms)
         except Exception:
@@ -952,7 +960,7 @@ class BedAllocationDomainService:
             # ALLOCATED/RELEASING/RELEASED/CANCELLED/FAILED never legitimately keep a queue entry.
             return "ORPHANED"
 
-    def _defer_promotion(self, allocation_id):
+    def _defer_promotion(self, allocation_id, backoff: bool = True):
         with self.session_factory() as session:
             record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).with_for_update().first()
             data = json.loads(record.workflow_data or "{}")
@@ -962,7 +970,9 @@ class BedAllocationDomainService:
             record.status = "RELEASED"
             record.pending_action = "PROMOTE"
             record.recovery_claim_owner = None
-            record.recovery_claim_until = datetime.now(timezone.utc)
+            # Back off (a quarter of the claim lease) so deferred promotions do not monopolize the pool lock.
+            record.recovery_claim_until = datetime.now(timezone.utc) + timedelta(
+                seconds=max(1, self.recovery_claim_seconds // 4) if backoff else 0)
             session.commit()
 
     def _promote_next_locked(self, allocation_id, lease, request_id, report_lock_wait=True):
@@ -1065,7 +1075,7 @@ class BedAllocationDomainService:
                     raise RuntimeError("Orphaned queue entry removal was not confirmed")
                 self._record_step(allocation_id, "PROMOTE", orphan_op, "REMOVE_ORPHANED_ENTRY", "SUCCEEDED",
                                   {"candidate_id": candidate_id}, "RELEASED")
-                self._defer_promotion(allocation_id)
+                self._defer_promotion(allocation_id, backoff=False)  # the next head may be promotable now
                 return None
             if candidate_state != "WAITLISTED":
                 # The queue head's own create (or cancel) is unresolved, e.g. an enqueue whose outcome
