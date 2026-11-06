@@ -30,7 +30,7 @@ class LockCoordinatorServicer(lock_pb2_grpc.LockCoordinatorServicer):
             path = zk_store.find_request(self.zk, request.pool_id, request.owner_id, request.acquire_id)
         if path is None:
             path = zk_store.join_queue(
-                self.zk, request.pool_id, request.owner_id, request.acquire_id, request.lease_ms
+                self.zk, request.pool_id, request.owner_id, request.acquire_id, request.lease_ms, request.wait_timeout_ms,
             )
 
         if not zk_store.wait_for_turn(self.zk, request.pool_id, path, request.wait_timeout_ms / 1000):

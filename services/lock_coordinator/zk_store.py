@@ -11,6 +11,7 @@ from kazoo.exceptions import BadVersionError, NoNodeError
 LOCK_ROOT = "/locks"
 DEFAULT_HOSTS = "127.0.0.1:2181,127.0.0.1:2182,127.0.0.1:2183"
 LOCK_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]+/lock-[0-9]{10}")
+ABANDON_GRACE_MS = 5000
 
 def connect(hosts=None):
     """Open a ZooKeeper session. Any of the listed copies can answer."""
@@ -19,13 +20,14 @@ def connect(hosts=None):
     return client
 
 
-def join_queue(client, pool_id, owner_id, acquire_id, lease_ms):
+def join_queue(client, pool_id, owner_id, acquire_id, lease_ms, wait_timeout_ms):
     """Create this request's place in line and return its full path."""
     data = {
         "owner_id": owner_id,
         "acquire_id": acquire_id,
         "lease_ms": lease_ms,
         "expires_at": None,  # Stays empty until this request gets the key.
+        "abandon_at": now_ms() + wait_timeout_ms + ABANDON_GRACE_MS,
     }
     return client.create(
         f"{LOCK_ROOT}/{pool_id}/lock-",
@@ -155,7 +157,11 @@ def reap_expired(client):
         for name in client.get_children(f"{LOCK_ROOT}/{pool_id}"):
             path = f"{LOCK_ROOT}/{pool_id}/{name}"
             data, stat = read_lock(client, path)
-            if data is None or data["expires_at"] is None or data["expires_at"] > now_ms():
+            if data is None:
+                continue
+            # A holder is judged by its lease, a waiter by when it should have given up.
+            deadline = data["abandon_at"] if data["expires_at"] is None else data["expires_at"]
+            if deadline > now_ms():
                 continue
             try:
                 # The version check means a renew that got in first wins.
