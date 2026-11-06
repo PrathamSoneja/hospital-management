@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: resource-analytics-service
+  labels:
+    app.kubernetes.io/name: resource-analytics-service
+    app.kubernetes.io/part-of: hospital-bed-management
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: resource-analytics-service
+  template:
+    metadata:
+      labels:
+        app: resource-analytics-service
+        app.kubernetes.io/name: resource-analytics-service
+        app.kubernetes.io/part-of: hospital-bed-management
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8008"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: resource-analytics-sa
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: resource-analytics
+          image: resource-analytics
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http-rest
+              containerPort: 8008
+          env:
+            - name: ANALYTICS_REST_HOST
+              value: "0.0.0.0"
+            - name: ANALYTICS_REST_PORT
+              value: "8008"
+            - name: ENVIRONMENT
+              value: "production"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8008
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8008
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2

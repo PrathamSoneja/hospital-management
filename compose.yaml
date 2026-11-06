@@ -82,6 +82,47 @@ services:
         condition: service_started
 
   # ============================================================================
+  # Application Services (Jay Patel - Member D)
+  # ============================================================================
+  bed-registry-service:
+    profiles: [application]
+    build:
+      context: .
+      dockerfile: services/bed_registry/Dockerfile
+    container_name: hospital-bed-registry
+    environment:
+      BED_REGISTRY_REST_HOST: 0.0.0.0
+      BED_REGISTRY_REST_PORT: 8000
+      BED_REGISTRY_GRPC_PORT: 50053
+      START_GRPC: "true"
+      ENVIRONMENT: ${ENVIRONMENT:-local}
+      DATABASE_URL: ${BED_REGISTRY_DATABASE_URL:-postgresql+psycopg2://postgres:postgrespassword@postgres:5432/hospital_allocation}
+    ports:
+      - "8003:8000"
+      - "50053:50053"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  resource-analytics-service:
+    profiles: [application]
+    build:
+      context: .
+      dockerfile: services/resource_analytics/Dockerfile
+    container_name: hospital-resource-analytics
+    environment:
+      ANALYTICS_REST_HOST: 0.0.0.0
+      ANALYTICS_REST_PORT: 8008
+      ENVIRONMENT: ${ENVIRONMENT:-local}
+      FIRESTORE_PROJECT_ID: hospital-bed-mgmt-dev
+      FIRESTORE_EMULATOR_HOST: firestore-emulator:8080
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-}
+    ports:
+      - "8008:8008"
+    depends_on:
+      - firestore-emulator
+
+  # ============================================================================
   # Observability (Prometheus & Grafana)
   # ============================================================================
   prometheus:

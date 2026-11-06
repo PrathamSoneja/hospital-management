@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bed-registry-service
+  labels:
+    app.kubernetes.io/name: bed-registry-service
+    app.kubernetes.io/part-of: hospital-bed-management
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: bed-registry-service
+  template:
+    metadata:
+      labels:
+        app: bed-registry-service
+        app.kubernetes.io/name: bed-registry-service
+        app.kubernetes.io/part-of: hospital-bed-management
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: bed-registry-sa
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bed-registry
+          image: bed-registry
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http-rest
+              containerPort: 8000
+            - name: grpc-internal
+              containerPort: 50053
+          env:
+            - name: BED_REGISTRY_REST_HOST
+              value: "0.0.0.0"
+            - name: BED_REGISTRY_REST_PORT
+              value: "8000"
+            - name: BED_REGISTRY_GRPC_PORT
+              value: "50053"
+            - name: START_GRPC
+              value: "true"
+            - name: ENVIRONMENT
+              value: "production"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
