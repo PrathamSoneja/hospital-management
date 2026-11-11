@@ -1,0 +1,74 @@
+# promtool unit tests for alerts.yml:
+#   docker run --rm --entrypoint promtool -v "$PWD/monitoring/rules:/r:ro" prom/prometheus:v2.50.0 test rules /r/alerts.test.yml
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 5s
+
+tests:
+  - name: lock wait p95 above 1s fires per pool; a fast pool stays quiet
+    interval: 5s
+    input_series:
+      - series: 'lock_wait_seconds_bucket{service="bed-allocation",pool_id="SLOW",le="0.5"}'
+        values: '0x40'
+      - series: 'lock_wait_seconds_bucket{service="bed-allocation",pool_id="SLOW",le="2.5"}'
+        values: '0+10x40'
+      - series: 'lock_wait_seconds_bucket{service="bed-allocation",pool_id="SLOW",le="+Inf"}'
+        values: '0+10x40'
+      - series: 'lock_wait_seconds_bucket{service="bed-allocation",pool_id="FAST",le="0.5"}'
+        values: '0+10x40'
+      - series: 'lock_wait_seconds_bucket{service="bed-allocation",pool_id="FAST",le="2.5"}'
+        values: '0+10x40'
+      - series: 'lock_wait_seconds_bucket{service="bed-allocation",pool_id="FAST",le="+Inf"}'
+        values: '0+10x40'
+    alert_rule_test:
+      - eval_time: 20s
+        alertname: HighLockWaitTime
+        exp_alerts: []          # condition true, but still within `for: 30s`
+      - eval_time: 2m
+        alertname: HighLockWaitTime
+        exp_alerts:
+          - exp_labels: {severity: warning, pool_id: SLOW}
+            exp_annotations:
+              summary: "High lock contention on pool SLOW"
+              description: "p95 lock wait time is 2.4s on pool SLOW"
+
+  - name: outbox backlog uses max across replicas (no double counting)
+    interval: 15s
+    input_series:
+      # Two replicas report the same table-wide count; sum() would report 300.
+      - series: 'outbox_pending_events{service="bed-allocation",destination="kafka",instance="a"}'
+        values: '150x10'
+      - series: 'outbox_pending_events{service="bed-allocation",destination="kafka",instance="b"}'
+        values: '150x10'
+      - series: 'outbox_pending_events{service="bed-allocation",destination="pubsub",instance="a"}'
+        values: '60x10'
+      - series: 'outbox_pending_events{service="bed-allocation",destination="pubsub",instance="b"}'
+        values: '60x10'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: OutboxDeliveryBacklogHigh
+        exp_alerts:
+          - exp_labels: {severity: critical, destination: kafka}
+            exp_annotations:
+              summary: "Transactional outbox backlog exceeding threshold for destination kafka"
+              description: "150 pending events waiting in outbox table"
+
+  - name: stale fencing rejections alert per pool only while increasing
+    interval: 15s
+    input_series:
+      - series: 'stale_fencing_rejections_total{service="triage",pool_id="P1"}'
+        values: '0 0 1 2 3 3 3 3 3 3 3 3'
+      - series: 'stale_fencing_rejections_total{service="triage",pool_id="P2"}'
+        values: '5x11'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: StaleFencingTokenDetected
+        exp_alerts:
+          - exp_labels: {severity: warning, pool_id: P1}
+            exp_annotations:
+              summary: "Stale fencing token mutation rejected in pool P1"
+              description: "A split-brain or delayed worker attempted an out-of-order mutation"
+      - eval_time: 165s
+        alertname: StaleFencingTokenDetected
+        exp_alerts: []

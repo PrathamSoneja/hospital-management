@@ -13,8 +13,10 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from services.bed_allocation.db import Base
+from tests.sandbox.fixtures import api, pool, sandbox  # noqa: F401  (one session sandbox for all suites)
 
-REQUIRED_INTEGRATION_ENV = ("TEST_POSTGRES_URL", "FIRESTORE_EMULATOR_HOST")
+REQUIRED_INTEGRATION_ENV = ("TEST_POSTGRES_URL", "FIRESTORE_EMULATOR_HOST", "SANDBOX_KAFKA_BOOTSTRAP",
+                            "PUBSUB_EMULATOR_HOST")
 
 
 def _integration_required() -> bool:
