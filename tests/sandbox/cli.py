@@ -23,7 +23,8 @@ import urllib.parse
 from pathlib import Path
 
 from tests.sandbox.audit import audit
-from tests.sandbox.runtime import REPO_ROOT, Sandbox, fixture_contention, fixture_multipool, http_json, wait_until
+from tests.sandbox.runtime import (DEMO_ENV, EXPIRY_DEMO_ENV, REPO_ROOT, Sandbox, fixture_contention, fixture_multipool,
+                                   http_json, wait_until)
 
 COMPOSE = ["docker", "compose", "-f", str(REPO_ROOT / "tests" / "sandbox" / "compose.yaml")]
 K6_IMAGE = "grafana/k6:0.54.0"
@@ -71,9 +72,10 @@ def sandbox_env():
     os.environ.update(ENV)
 
 
-def new_sandbox(log_dir: Path) -> Sandbox:
+def new_sandbox(log_dir: Path, profile_env: dict | None = None) -> Sandbox:
     sandbox_env()
-    return Sandbox(postgres_url=ENV["TEST_POSTGRES_URL"], database="hospital_sandbox_load_test",
+    return Sandbox(allocator_overrides={i: dict(profile_env or {}) for i in range(2)},
+                   postgres_url=ENV["TEST_POSTGRES_URL"], database="hospital_sandbox_load_test",
                    firestore_host=ENV["FIRESTORE_EMULATOR_HOST"], pubsub_host=ENV["PUBSUB_EMULATOR_HOST"],
                    kafka_bootstrap=ENV["SANDBOX_KAFKA_BOOTSTRAP"], log_dir=log_dir, allocators=2,
                    bind_host="0.0.0.0", ports=dict(PORTS), recovery_claim_seconds=15)
@@ -88,8 +90,9 @@ def verify(extra_args):
                check=False, env=env).returncode
 
 
-def up(fixture: str):
-    sandbox = new_sandbox(REPO_ROOT / ".sandbox" / "interactive")
+def up(fixture: str, profile: str):
+    profile_env = {"normal": None, "demo": DEMO_ENV, "expiry-demo": EXPIRY_DEMO_ENV}[profile]
+    sandbox = new_sandbox(REPO_ROOT / ".sandbox" / "interactive", profile_env)
     sandbox.start()
     try:
         sandbox.seed(fixture_contention() if fixture == "contention" else fixture_multipool(admissions_per_pool=200))
@@ -236,6 +239,8 @@ def main():
     verify_parser.add_argument("pytest_args", nargs="*")
     up_parser = sub.add_parser("up")
     up_parser.add_argument("--fixture", choices=["contention", "multipool"], default="contention")
+    up_parser.add_argument("--profile", choices=["normal", "demo", "expiry-demo"], default="normal",
+                           help="demo: accept pause_ms/lock=false; expiry-demo: also 5 s lease without renewal")
     load_parser = sub.add_parser("load")
     load_parser.add_argument("--duration", default="2m")
     load_parser.add_argument("--vus", type=int, default=20)
@@ -249,7 +254,7 @@ def main():
     elif args.command == "verify":
         sys.exit(verify(args.pytest_args))
     elif args.command == "up":
-        up(args.fixture)
+        up(args.fixture, args.profile)
     elif args.command == "load":
         sys.exit(load(args.duration, args.vus))
 

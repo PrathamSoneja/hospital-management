@@ -37,6 +37,15 @@ def build_app(database_url: str = None, clients: dict | None = None, event_publi
     if os.environ.get("ENABLE_OUTBOX_WORKER", "false").lower() == "true":
         endpoints.append("KAFKA_BOOTSTRAP_SERVERS")
     profile = validate_cloud_runtime(endpoints)
+    # Demo controls (pause_ms, lock=false) and disabled renewal exist only for explicit demos.
+    demo_mode = os.environ.get("ALLOCATION_DEMO_MODE", "false").strip().lower() == "true"
+    lock_renewal = os.environ.get("LOCK_RENEWAL_ENABLED", "true").strip().lower() != "false"
+    if demo_mode and profile == "production":
+        raise ConfigError("ALLOCATION_DEMO_MODE is not permitted in production")
+    if not lock_renewal and not demo_mode:
+        raise ConfigError("LOCK_RENEWAL_ENABLED=false is permitted only with ALLOCATION_DEMO_MODE=true")
+    if demo_mode:
+        logger.warning("Allocation demo mode is enabled: pause_ms and unsafe lock=false requests are accepted")
     rpc_timeout_s = bounded_int("RPC_TIMEOUT_MS", 2000, 100, 30000) / 1000
     engine = get_engine(database_url)
     session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
@@ -71,6 +80,8 @@ def build_app(database_url: str = None, clients: dict | None = None, event_publi
         lock_lease_ms=bounded_int("LOCK_LEASE_MS", 10000, 1000, 120000),
         lock_wait_timeout_ms=bounded_int("LOCK_WAIT_TIMEOUT_MS", 5000, 100, 60000),
         recovery_claim_seconds=bounded_int("RECOVERY_CLAIM_SECONDS", 60, 5, 600),
+        lock_renewal=lock_renewal,
+        demo_mode=demo_mode,
     )
     set_service(domain_service)
 

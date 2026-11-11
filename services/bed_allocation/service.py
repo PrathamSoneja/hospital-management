@@ -11,6 +11,7 @@ Implements:
 """
 import hashlib
 import json
+from dataclasses import dataclass
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -21,7 +22,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from services.bed_allocation.clients.base import (
-    BedDto, BedRegistryClient, LockCoordinatorClient, PatientRegistryClient,
+    BedDto, BedRegistryClient, LockCoordinatorClient, LockLease, PatientRegistryClient,
     StaffSchedulerClient, TriageClient
 )
 from services.bed_allocation.db import (
@@ -40,6 +41,13 @@ from starlette import status
 import time
 
 ACTIVE_ADMISSION_INDEX = "uq_allocations_active_admission"
+
+
+@dataclass(frozen=True)
+class DemoControls:
+    """Per-request demo controls, accepted only when the service runs in demo mode."""
+    pause_ms: int = 0     # hold the pool lease this long after acquiring it
+    lock: bool = True     # False = explicitly unsafe: skip the pool lease entirely
 
 
 def _next_outbox_sequence(session, destination: str, pool_id: str) -> int:
@@ -147,6 +155,7 @@ class BedAllocationDomainService:
         lock_wait_timeout_ms: int = 5000,
         recovery_claim_seconds: int = 60,
         lock_renewal: bool = True,
+        demo_mode: bool = False,
     ):
         self.session_factory = session_factory
         self.patient_client = patient_client
@@ -160,6 +169,7 @@ class BedAllocationDomainService:
         # How long a request/recovery claim stays exclusive; must exceed the longest workflow step.
         self.recovery_claim_seconds = recovery_claim_seconds
         self.lock_renewal = lock_renewal
+        self.demo_mode = demo_mode
         self._renewers: dict[str, LeaseRenewer] = {}  # lock_id -> renewer shared by holders of that lease
         self._renewers_lock = threading.Lock()
 
@@ -298,7 +308,8 @@ class BedAllocationDomainService:
             session.commit()
             return self._allocation_response(allocation)
 
-    def create_allocation(self, req: CreateAllocationRequest, request_id: str, idempotency_key: Optional[str] = None):
+    def create_allocation(self, req: CreateAllocationRequest, request_id: str, idempotency_key: Optional[str] = None,
+                          demo: Optional[DemoControls] = None):
         start_time = time.perf_counter()
         with self.session_factory() as session:
             # 1. Durable Idempotency Check
@@ -414,6 +425,7 @@ class BedAllocationDomainService:
             request_payload=req.model_dump(),
             started_at=start_time,
             claim_owner=claim_owner,
+            demo=demo,
         )
 
     def _read_operation(self, operation_id: str) -> Optional[dict]:
@@ -434,6 +446,7 @@ class BedAllocationDomainService:
     def _run_create_workflow(
         self, allocation_id: str, request_id: str, idempotency_key: Optional[str],
         request_payload: dict, started_at: Optional[float] = None, claim_owner: Optional[str] = None,
+        demo: Optional[DemoControls] = None,
     ) -> AllocationResponse:
         started_at = started_at or time.perf_counter()
         with self.session_factory() as session:
@@ -456,13 +469,21 @@ class BedAllocationDomainService:
             session.commit()
 
         try:
-            lease = self._acquire_pool_lease(req.pool_id, f"acq-{allocation_id}")
+            if demo and not demo.lock:
+                # Explicitly unsafe demo: no pool lease. Its mutations carry no valid lock or fencing
+                # token, so fenced downstream services are expected to refuse them; nothing is bypassed.
+                lease = LockLease(lock_id="", pool_id=req.pool_id, owner_id=self.owner_id,
+                                  fencing_token=0, expires_at=0, lock_wait_ms=0)
+            else:
+                lease = self._acquire_pool_lease(req.pool_id, f"acq-{allocation_id}")
         except Exception as error:
             # Keep the action in progress: resetting to CHECK_PRIORITY would forget an outstanding
             # step (e.g. an enqueue whose outcome is unknown) and could orphan its queue entry.
             return self._mark_recovering(
                 allocation_id, action, f"{allocation_id}:acquire-lock", "ACQUIRE_LOCK", error
             )
+        if demo and demo.pause_ms:
+            time.sleep(demo.pause_ms / 1000)  # demo: the holder pauses while holding (or not renewing) the lease
         # One observation per acquisition: the Coordinator-reported queue wait, not RPC or patient wait.
         lock_wait_ms = max(0, int(lease.lock_wait_ms))
         LOCK_WAIT_SECONDS.labels(service="bed-allocation", pool_id=req.pool_id).observe(lock_wait_ms / 1000)
@@ -660,7 +681,7 @@ class BedAllocationDomainService:
             operation_id = f"{allocation_id}:{action.lower().replace('_', '-')}"
             return self._mark_recovering(allocation_id, action, operation_id, action, error)
         finally:
-            lease_released = self._release_pool_lease(lease)
+            lease_released = self._release_pool_lease(lease) if lease.lock_id else True
 
         if not lease_released:
             return self._mark_recovering(

@@ -28,6 +28,10 @@ from sqlalchemy import create_engine, text
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOOPBACK = {"localhost", "127.0.0.1", "::1"}
 
+# Allocator environment profiles. The staging lease stays 10 s with renewal; demos opt in explicitly.
+DEMO_ENV = {"ALLOCATION_DEMO_MODE": "true"}
+EXPIRY_DEMO_ENV = {**DEMO_ENV, "LOCK_LEASE_MS": "5000", "LOCK_RENEWAL_ENABLED": "false"}
+
 
 def free_port() -> int:
     with socket.socket() as sock:
@@ -202,6 +206,7 @@ class Sandbox:
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
     outbox_overrides: dict = field(default_factory=dict)
     recovery_claim_seconds: int = 60
+    allocator_overrides: dict = field(default_factory=dict)  # allocator index -> extra environment
 
     def __post_init__(self):
         if not self.database.endswith("_test"):
@@ -318,6 +323,7 @@ class Sandbox:
                 OUTBOX_PUBLISH_TIMEOUT_SECONDS="5", OUTBOX_MAX_BACKOFF_SECONDS="4", OUTBOX_CLAIM_SECONDS="10",
             )
             env.update(self.outbox_overrides)
+        env.update(self.allocator_overrides.get(index, {}))
         return env
 
     def _allocator(self, index: int):
