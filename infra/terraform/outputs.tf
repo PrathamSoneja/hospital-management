@@ -33,6 +33,16 @@ output "patient_registry_database_username" {
   value       = module.cloudsql.patient_registry_username
 }
 
+output "allocation_app_database_username" {
+  description = "Least-privilege runtime database username for Bed Allocation."
+  value       = module.cloudsql.allocation_app_username
+}
+
+output "allocation_migrator_database_username" {
+  description = "Schema migration database username for Bed Allocation."
+  value       = module.cloudsql.allocation_migrator_username
+}
+
 output "patient_documents_bucket" {
   description = "Private Cloud Storage bucket for patient documents."
   value       = module.storage.patient_documents_bucket
@@ -77,4 +87,14 @@ output "confluent_runtime_credentials" {
   description = "Sensitive Kafka credentials for Bed Allocation and Resource Analytics. Store as Kubernetes secrets through the approved secret workflow."
   value       = module.confluent.runtime_credentials
   sensitive   = true
+}
+
+output "notification_topic_id" {
+  description = "Pub/Sub topic ID consumed by Eventarc for the notification service."
+  value       = module.notifications.notification_topic_id
+}
+
+output "notification_service_uri" {
+  description = "Internal Cloud Run URL for the Pub/Sub notification handler."
+  value       = module.notifications.notification_service_uri
 }

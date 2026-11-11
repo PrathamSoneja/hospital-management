@@ -33,6 +33,12 @@ The Patient Registry owns the `patients` Cloud SQL database and stores uploaded 
 
 Document uploads accept PDF, JPEG, and PNG up to 10 MiB. The service does not log patient details or original filenames.
 
+### Staff Scheduler
+
+The Staff Scheduler owns Firestore's `staff` collection. Staff records declare the pools they can cover, their active status, role, and maximum concurrent assignment count. Shifts are stored at `staff/{staff_id}/shifts/{shift_id}` with timezone-aware start/end timestamps. A nurse is considered available only when active, on an active shift, assigned to the requested pool, and below their concurrent assignment limit.
+
+REST roster routes are specified in [`contracts/openapi/staff.openapi.yaml`](../contracts/openapi/staff.openapi.yaml). The gRPC `StaffScheduler` contract remains in [`contracts/proto/staff.proto`](../contracts/proto/staff.proto): capacity checks use the pool ID, and assignment/release operations require the shared `MutationContext`. Firestore transactions update the staff assignment counter, assignment record, operation idempotency record, and pool fencing state atomically.
+
 The Allocation dependency contract for `GET /api/v1/admissions/{admission_id}` is `admission_id`, `patient_id`, and `status`; all three are required and the returned admission ID must match the requested ID. Allocation does not synthesize patient identity or an `OPEN` status when the Registry response is incomplete. The focused contract is [`contracts/openapi/patient-registry-admissions.openapi.yaml`](../contracts/openapi/patient-registry-admissions.openapi.yaml).
 
 ---

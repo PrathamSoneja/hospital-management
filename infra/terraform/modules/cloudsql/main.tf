@@ -44,17 +44,35 @@ resource "google_sql_database_instance" "main" {
 }
 
 resource "google_sql_user" "postgres_admin" {
-  project  = var.project_id
-  name     = "postgres"
-  instance = google_sql_database_instance.main.name
-  password = var.admin_password
+  project             = var.project_id
+  name                = "postgres"
+  instance            = google_sql_database_instance.main.name
+  password_wo         = var.admin_password
+  password_wo_version = var.admin_password_version
 }
 
 resource "google_sql_user" "patient_registry" {
-  project  = var.project_id
-  name     = "patient_registry"
-  instance = google_sql_database_instance.main.name
-  password = var.patient_registry_password
+  project             = var.project_id
+  name                = "patient_registry"
+  instance            = google_sql_database_instance.main.name
+  password_wo         = var.patient_registry_password
+  password_wo_version = var.patient_registry_password_version
+}
+
+resource "google_sql_user" "allocation_app" {
+  project             = var.project_id
+  name                = "allocation_app"
+  instance            = google_sql_database_instance.main.name
+  password_wo         = var.allocation_app_password
+  password_wo_version = var.allocation_app_password_version
+}
+
+resource "google_sql_user" "allocation_migrator" {
+  project             = var.project_id
+  name                = "allocation_migrator"
+  instance            = google_sql_database_instance.main.name
+  password_wo         = var.allocation_migrator_password
+  password_wo_version = var.allocation_migrator_password_version
 }
 
 resource "google_sql_database" "service_databases" {

@@ -28,6 +28,8 @@ resource "google_container_cluster" "main" {
   initial_node_count          = 1
   deletion_protection         = var.deletion_protection
   enable_intranode_visibility = true
+  # Dataplane V2 enforces Kubernetes NetworkPolicies without a separate legacy addon.
+  datapath_provider = "ADVANCED_DATAPATH"
 
   release_channel {
     channel = "REGULAR"
@@ -73,6 +75,14 @@ resource "google_container_cluster" "main" {
 
   monitoring_config {
     enable_components = ["SYSTEM_COMPONENTS"]
+
+    managed_prometheus {
+      enabled = true
+    }
+  }
+
+  secret_manager_config {
+    enabled = true
   }
 
   resource_labels = var.resource_labels

@@ -6,7 +6,7 @@ use the tracked doubles under `tests/support/` and never import this directory.
 Production entrypoints use real adapters only; missing dependencies fail
 clearly. Docker PostgreSQL is the local relational database, not an emulator.
 
-## Local dependencies and regression
+## Local dependencies and regression (historical; prefer the canonical workflow at the end)
 
 From the repository root in PowerShell:
 
@@ -77,19 +77,17 @@ document storage. It does not contact Cloud Storage.
   emulator settings. Terraform outputs are configuration outputs only; no
   Terraform apply or deployed resource state is confirmed in this workspace.
 
-## Local k6 load targets (MOCK-TESTED evidence only)
+## Canonical workflow (superseded the dev-local launchers, 2026-11-06)
 
-`dev-local/load_target.py` (ignored, machine-local) starts real Allocation code on a disposable
-migrated database with explicit stateful doubles from `tests/support/` (exclusive Lock Coordinator,
-Bed/Staff/Patient, in-process Triage), and real Triage code on the Firestore emulator with the gRPC
-lock double. Use a fresh `*_test` database per contention run.
+The reproducible sandbox, load procedure, and CI now live in tracked, test-only code under
+`tests/sandbox/` and `tests/support/`; nothing here is required. Use:
 
 ```powershell
-$env:ENVIRONMENT='local'; $env:DATABASE_URL='<disposable *_test URL>'; .venv\Scripts\python.exe dev-local\load_target.py allocation
-$env:ENVIRONMENT='local'; $env:FIRESTORE_EMULATOR_HOST='localhost:8080'; .venv\Scripts\python.exe dev-local\load_target.py triage
-.\scripts\local\Invoke-LocalLoad.ps1 -Scenario contention
-.\scripts\local\Invoke-LocalLoad.ps1 -Scenario sustained -Duration 2m
+.\scripts\local\Sandbox.ps1 infra-up      # isolated hospital-sandbox Compose project
+.\scripts\local\Sandbox.ps1 verify        # full suite; skipped integration tests fail
+.\scripts\local\Sandbox.ps1 load          # reset -> seed -> k6 -> invariant audit -> evidence
+.\scripts\local\Sandbox.ps1 infra-down
 ```
 
-Full local verification: `.\scripts\local\Start-LocalStack.ps1` then `.\scripts\local\Invoke-LocalTests.ps1`
-(reads the ignored `.env.local`; created from `.env.local.example`).
+See `docs/precloud-status.md`. The older `dev-local/allocation_demo.py` and `load_target.py`
+launchers (ignored, machine-local) are optional and no longer used by any documented step.

@@ -8,80 +8,103 @@ on:
 permissions:
   contents: read
 
+env:
+  TERRAFORM_VERSION: 1.15.8
+  KUBECTL_VERSION: v1.36.1
+  PROMETHEUS_IMAGE: prom/prometheus:v2.50.0
+  KUBECONFORM_IMAGE: ghcr.io/yannh/kubeconform:v0.6.7
+
 jobs:
   checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
-      GRAFANA_ADMIN_PASSWORD: local-ci-only
-      # Disposable CI-only database; no shared or cloud database is reachable from CI.
-      TEST_POSTGRES_URL: postgresql+psycopg2://postgres:ci-only@localhost:5432/hospital_allocation_ci_test
-      FIRESTORE_EMULATOR_HOST: localhost:8080
-      # Any skipped integration test fails the job instead of passing silently.
-      REQUIRE_INTEGRATION: '1'
-      ZK_TEST_HOSTS: localhost:2181
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: ci-only
-          POSTGRES_DB: hospital_allocation_ci_test
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s --health-timeout 5s --health-retries 10
-      zookeeper:
-        image: zookeeper:3.9
-        ports: ['2181:2181']
+      GRAFANA_ADMIN_PASSWORD: local-ci-only  # only for `docker compose config` of the main Compose file
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: pip
-      - name: Start Firestore emulator
-        run: |
-          docker run -d --name firestore-emulator -p 8080:8080 \
-            gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
-            gcloud beta emulators firestore start --host-port=0.0.0.0:8080
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: ${{ env.KUBECTL_VERSION }}
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt openapi-spec-validator
-      - name: Validate contracts and generated protobufs
+
+      - name: Contracts and generated protobufs
         run: |
-          python -m openapi_spec_validator contracts/openapi/allocation.openapi.yaml
-          python -m openapi_spec_validator contracts/openapi/triage.openapi.yaml
-          python -m openapi_spec_validator contracts/openapi/patient-registry-admissions.openapi.yaml
+          for spec in contracts/openapi/*.yaml; do python -m openapi_spec_validator "$spec"; done
           python scripts/compile_proto.py
           git diff --exit-code -- shared/generated
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.7.5"
-      - name: Validate infrastructure and local Compose
+      - name: Terraform format and offline validation (no backend, no cloud credentials)
         run: |
           terraform fmt -check -recursive infra/terraform
+          for dir in infra/terraform infra/terraform/bootstrap; do
+            terraform -chdir="$dir" init -backend=false -input=false -lockfile=readonly
+            terraform -chdir="$dir" validate -no-color
+          done
+
+      - name: Compose files
+        run: |
           docker compose config --quiet
-      - name: Render and validate Kubernetes manifests
+          docker compose -f tests/sandbox/compose.yaml config --quiet
+
+      - name: Render and schema-validate Kubernetes templates
         run: |
           mkdir -p rendered
           kubectl kustomize k8s/overlays/staging > rendered/staging.yaml
           kubectl kustomize k8s/jobs/allocation-migrate > rendered/migrate.yaml
-          docker run --rm -v "$PWD/rendered:/m:ro" ghcr.io/yannh/kubeconform:v0.6.7             -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0 /m/staging.yaml /m/migrate.yaml
-      - name: Migrate empty database and check model drift
-        env:
-          DATABASE_URL: postgresql+psycopg2://postgres:ci-only@localhost:5432/hospital_allocation_ci_test
+          docker run --rm -v "$PWD/rendered:/m:ro" "$KUBECONFORM_IMAGE" \
+            -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0 /m/staging.yaml /m/migrate.yaml
+          # Templates intentionally hold placeholders; the release gate must reject them.
+          if python scripts/check_release_config.py > rendered/release-gate.txt; then
+            echo "release gate unexpectedly accepted placeholder templates"; exit 1
+          fi
+
+      - name: Prometheus rules
         run: |
-          python -m alembic upgrade head
-          python -m alembic check
-      - name: Wait for Firestore emulator
-        run: timeout 60 bash -c 'until curl -sf http://localhost:8080 >/dev/null; do sleep 2; done'
-      - name: Run tracked tests
-        run: python -m pytest -p no:cacheprovider -q
-      - name: Build in-scope service images
+          docker run --rm --entrypoint promtool -v "$PWD/monitoring/rules:/r:ro" "$PROMETHEUS_IMAGE" check rules /r/alerts.yml
+          docker run --rm --entrypoint promtool -v "$PWD/monitoring/rules:/r:ro" "$PROMETHEUS_IMAGE" test rules /r/alerts.test.yml
+
+      - name: Start sandbox infrastructure
+        run: python -m tests.sandbox.cli infra-up
+
+      - name: Full test suite (integration required; any skip fails)
+        run: python -m tests.sandbox.cli verify
+
+      - name: Load procedure (reset, seed, k6, invariant audit, observability evidence)
+        run: python -m tests.sandbox.cli load --duration 45s --vus 15
+
+      - name: Build and smoke-test images (health, readiness, graceful shutdown)
         run: |
           docker build -f services/bed_allocation/Dockerfile -t hospital-bed-allocation:ci .
           docker build -f services/triage/Dockerfile -t hospital-triage:ci .
           docker build -f services/patient_registry/Dockerfile -t hospital-patient-registry:ci .
-      - name: Smoke-check Allocation image
-        run: python scripts/smoke_image.py hospital-bed-allocation:ci
+          # hospital_migration_empty_test is left at head by tests/test_migrations_postgres.py
+          python scripts/smoke_image.py hospital-bed-allocation:ci \
+            --database-url postgresql+psycopg2://postgres:sandbox-only@127.0.0.1:45432/hospital_migration_empty_test
+          python scripts/smoke_image.py hospital-triage:ci --service triage --firestore localhost:48080 --port 18003
+
+      - name: Upload test, load, and validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: precloud-evidence
+          path: |
+            .sandbox/pytest/
+            .sandbox/evidence/
+            rendered/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Stop sandbox infrastructure
+        if: always()
+        run: python -m tests.sandbox.cli infra-down
