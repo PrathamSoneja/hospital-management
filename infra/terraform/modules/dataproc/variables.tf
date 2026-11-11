@@ -40,4 +40,3 @@ variable "labels" {
   default     = {}
   description = "Resource labels"
 }
-
