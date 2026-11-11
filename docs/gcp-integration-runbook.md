@@ -221,6 +221,7 @@ scale node pool/Dataproc down or tear down only with approval.
 | `KAFKA_BOOTSTRAP_SERVERS`, `KAFKA_TOPIC_BED_EVENTS`, `KAFKA_SECURITY_PROTOCOL`, `KAFKA_SASL_MECHANISM`, `KAFKA_SSL_CA_LOCATION` | Jay | Allocation outbox | No |
 | `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD` | Secret Manager `kafka-allocation-sasl-*` | Allocation (`*_FILE`) | **Yes** |
 | `RPC_TIMEOUT_MS`, `LOCK_WAIT_TIMEOUT_MS`, `LOCK_LEASE_MS`, `OUTBOX_*` | Repository defaults (bounded) | Allocation | No |
+| `ALLOCATION_DEMO_MODE`, `LOCK_RENEWAL_ENABLED` | Leave unset in staging/production (defaults: demo off, renewal on); demo profiles only, refused in production | Allocation | No |
 | Git repo URL/branch, ArgoCD project | Ruchir | ArgoCD Applications | No |
 | `<BILLING_ACCOUNT_ID>`, `<BUDGET_AMOUNT>` | Project owner | Budget | No |
 
