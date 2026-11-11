@@ -48,7 +48,7 @@ jobs:
         run: |
           terraform fmt -check -recursive infra/terraform
           for dir in infra/terraform infra/terraform/bootstrap; do
-            terraform -chdir="$dir" init -backend=false -input=false -lockfile=readonly
+            terraform -chdir="$dir" init -backend=false -input=false
             terraform -chdir="$dir" validate -no-color
           done
 
