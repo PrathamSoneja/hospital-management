@@ -7,6 +7,8 @@ Workflow ownership regressions found by the local k6 contention run (PostgreSQL)
    durable outcome instead of looping in reconciliation.
 """
 import threading
+
+import pytest
 from datetime import datetime, timedelta, timezone
 
 from services.bed_allocation.db import AllocationModel
@@ -284,3 +286,39 @@ def test_deferred_promotion_backs_off_without_taking_the_pool_lock(pg_sessions):
         row = session.query(AllocationModel).filter_by(allocation_id=occupant.allocation_id).one()
         retry_at = row.recovery_claim_until if row.recovery_claim_until.tzinfo else row.recovery_claim_until.replace(tzinfo=timezone.utc)
         assert row.pending_action == "PROMOTE" and retry_at > datetime.now(timezone.utc) + timedelta(seconds=5)
+
+
+def test_matching_retry_committed_between_idempotency_and_active_checks_replays(pg_sessions):
+    """CI race: request A's idempotency lookup misses, request B (same key and payload) commits,
+    then A's active-admission check sees B's row. A must replay B's allocation, not return 409."""
+    service, _, _, _, _ = _pool_service(pg_sessions, {"adm-1": 1})
+    request = CreateAllocationRequest(admission_id="adm-1", pool_id="POOL-A")
+    original_check = service._check_idempotency
+    other = {}
+
+    def check_then_let_the_other_request_commit(session, key, endpoint, payload):
+        found = original_check(session, key, endpoint, payload)
+        if found is None and "response" not in other:
+            other["response"] = None  # run the concurrent request exactly once, to completion
+            worker = threading.Thread(target=lambda: other.update(response=service.create_allocation(request, "r-b", "same-key")))
+            worker.start()
+            worker.join(30)
+            assert not worker.is_alive()
+        return found
+
+    service._check_idempotency = check_then_let_the_other_request_commit
+    replay = service.create_allocation(request, "r-a", "same-key")
+    assert other["response"] is not None
+    assert replay.allocation_id == other["response"].allocation_id
+    with pg_sessions() as session:
+        assert session.query(AllocationModel).filter_by(admission_id="adm-1").count() == 1
+
+    # Unchanged semantics: a different key for the same admission is still refused...
+    service._check_idempotency = original_check
+    with pytest.raises(AppException) as different_key:
+        service.create_allocation(request, "r-c", "other-key")
+    assert different_key.value.code == "ACTIVE_ALLOCATION_EXISTS"
+    # ...and the same key with a changed payload is still a mismatch.
+    with pytest.raises(AppException) as mismatch:
+        service.create_allocation(CreateAllocationRequest(admission_id="adm-1", pool_id="POOL-B"), "r-d", "same-key")
+    assert mismatch.value.code == "IDEMPOTENCY_MISMATCH"

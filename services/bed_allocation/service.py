@@ -327,6 +327,14 @@ class BedAllocationDomainService:
                 .first()
             )
             if active:
+                # A matching request may have committed its claim and allocation together after
+                # step 1 missed; re-read the claim in a fresh view before refusing.
+                with self.session_factory() as recheck_session:
+                    cached = self._check_idempotency(
+                        recheck_session, idempotency_key, "POST /api/v1/allocations", req.model_dump()
+                    )
+                if cached:
+                    return cached if isinstance(cached, AllocationResponse) else AllocationResponse(**cached)
                 raise AppException(
                     code="ACTIVE_ALLOCATION_EXISTS",
                     message=f"An active allocation or waitlist entry ({active.allocation_id}) already exists for admission '{req.admission_id}'",
