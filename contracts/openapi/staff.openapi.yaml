@@ -1,0 +1,196 @@
+openapi: 3.0.3
+info:
+  title: Hospital Staff Scheduler
+  version: 1.0.0
+  description: Roster and shift administration API; assignments are managed through gRPC.
+servers:
+  - url: /
+paths:
+  /api/v1/staff:
+    post:
+      operationId: createStaff
+      summary: Create a staff roster record
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StaffCreate"
+      responses:
+        "201":
+          description: Staff record created or replayed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StaffRecord"
+        "409":
+          $ref: "#/components/responses/Error"
+  /api/v1/staff/{staff_id}:
+    get:
+      operationId: getStaff
+      parameters:
+        - $ref: "#/components/parameters/StaffId"
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Staff record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StaffRecord"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/v1/staff/{staff_id}/shifts:
+    get:
+      operationId: listStaffShifts
+      parameters:
+        - $ref: "#/components/parameters/StaffId"
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Staff shifts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StaffShift"
+  /api/v1/staff/{staff_id}/shifts/{shift_id}:
+    put:
+      operationId: createOrUpdateStaffShift
+      parameters:
+        - $ref: "#/components/parameters/StaffId"
+        - $ref: "#/components/parameters/ShiftId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ShiftCreate"
+      responses:
+        "200":
+          description: Shift created, updated, or replayed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StaffShift"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    RequestId:
+      name: X-Request-ID
+      in: header
+      required: false
+      schema:
+        type: string
+    StaffId:
+      name: staff_id
+      in: path
+      required: true
+      schema:
+        type: string
+    ShiftId:
+      name: shift_id
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    StaffCreate:
+      type: object
+      additionalProperties: false
+      required: [staff_id, display_name, pool_ids]
+      properties:
+        staff_id:
+          type: string
+          maxLength: 64
+        display_name:
+          type: string
+          maxLength: 100
+        role:
+          type: string
+          enum: [NURSE, TECHNICIAN]
+          default: NURSE
+        pool_ids:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        active:
+          type: boolean
+          default: true
+        max_concurrent_assignments:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 1
+    StaffRecord:
+      allOf:
+        - $ref: "#/components/schemas/StaffCreate"
+        - type: object
+          required: [active_assignment_count]
+          properties:
+            active_assignment_count:
+              type: integer
+              minimum: 0
+    ShiftCreate:
+      type: object
+      additionalProperties: false
+      required: [starts_at, ends_at]
+      properties:
+        starts_at:
+          type: string
+          format: date-time
+        ends_at:
+          type: string
+          format: date-time
+        active:
+          type: boolean
+          default: true
+    StaffShift:
+      allOf:
+        - $ref: "#/components/schemas/ShiftCreate"
+        - type: object
+          required: [shift_id]
+          properties:
+            shift_id:
+              type: string
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id, retryable]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            request_id:
+              type: string
+            retryable:
+              type: boolean
+  responses:
+    Error:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"

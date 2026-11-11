@@ -60,6 +60,26 @@ services:
     depends_on:
       - firestore-emulator
 
+  staff-scheduler-service:
+    profiles: [application]
+    build:
+      context: .
+      dockerfile: services/staff_scheduler/Dockerfile
+    container_name: hospital-staff-scheduler
+    environment:
+      STAFF_SCHEDULER_REST_HOST: 0.0.0.0
+      STAFF_SCHEDULER_REST_PORT: 8000
+      STAFF_SCHEDULER_GRPC_HOST: 0.0.0.0
+      STAFF_SCHEDULER_GRPC_PORT: 50051
+      START_GRPC: "true"
+      FIRESTORE_PROJECT_ID: hospital-bed-mgmt-dev
+      FIRESTORE_EMULATOR_HOST: firestore-emulator:8080
+    ports:
+      - "8003:8000"
+      - "50054:50051"
+    depends_on:
+      - firestore-emulator
+
   bed-allocation-service:
     profiles: [application]
     build:
