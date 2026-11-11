@@ -101,6 +101,47 @@ def with_database(url: str, database: str) -> str:
     return urlunsplit(parts._replace(path=f"/{database}"))
 
 
+# Local mirrors of the Cloud SQL users created by Terraform (modules/cloudsql): migrations run as the
+# schema-owning migrator, the service runs as the DML-only app user. Passwords are sandbox-only.
+MIGRATOR_ROLE, APP_ROLE, SANDBOX_ROLE_PASSWORD = "allocation_migrator", "allocation_app", "sandbox-only"
+
+
+def with_role(url: str, role: str) -> str:
+    parts = urlsplit(url)
+    host = parts.netloc.rsplit("@", 1)[-1]
+    return urlunsplit(parts._replace(netloc=f"{role}:{SANDBOX_ROLE_PASSWORD}@{host}"))
+
+
+def prepare_allocation_database(admin_url: str, database: str) -> tuple[str, str]:
+    """Drop/recreate a disposable *_test database the way the runbook prepares Cloud SQL.
+
+    Ensures the two login roles exist on the local server, recreates the database owned by the
+    admin, and grants only USAGE, CREATE on schema public to the migrator. Returns
+    (migrator_url, app_url); grants for the app user come from migration 20261031_04.
+    """
+    assert_disposable_database_url(with_database(admin_url, database))
+    admin = create_engine(with_database(admin_url, "postgres"), isolation_level="AUTOCOMMIT")
+    try:
+        with admin.connect() as connection:
+            for role in (MIGRATOR_ROLE, APP_ROLE):
+                if not connection.execute(text("SELECT 1 FROM pg_roles WHERE rolname = :r"), {"r": role}).scalar():
+                    connection.execute(text(f"CREATE ROLE {role} LOGIN PASSWORD '{SANDBOX_ROLE_PASSWORD}'"))
+            connection.execute(text("SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                                    "WHERE datname = :db AND pid <> pg_backend_pid()"), {"db": database})
+            connection.execute(text(f'DROP DATABASE IF EXISTS "{database}"'))
+            connection.execute(text(f'CREATE DATABASE "{database}"'))
+    finally:
+        admin.dispose()
+    owner = create_engine(with_database(admin_url, database), isolation_level="AUTOCOMMIT")
+    try:
+        with owner.connect() as connection:
+            connection.execute(text(f"GRANT USAGE, CREATE ON SCHEMA public TO {MIGRATOR_ROLE}"))
+    finally:
+        owner.dispose()
+    target = with_database(admin_url, database)
+    return with_role(target, MIGRATOR_ROLE), with_role(target, APP_ROLE)
+
+
 @dataclass
 class ManagedProcess:
     name: str
@@ -166,7 +207,9 @@ class Sandbox:
         if not self.database.endswith("_test"):
             raise ValueError("sandbox database must end in _test")
         self.log_dir = Path(self.log_dir)
-        self.database_url = with_database(self.postgres_url, self.database)
+        # Processes and audits use the restricted runtime role; migrations use the migrator role.
+        self.database_url = with_role(with_database(self.postgres_url, self.database), APP_ROLE)
+        self.migrator_url = with_role(with_database(self.postgres_url, self.database), MIGRATOR_ROLE)
         assert_disposable_database_url(self.database_url)
         for key in ("deps_grpc", "deps_http", "triage_rest", "triage_grpc"):
             self.ports.setdefault(key, free_port())
@@ -193,16 +236,8 @@ class Sandbox:
 
     # ---------- storage ----------
     def reset_database(self):
-        admin = create_engine(with_database(self.postgres_url, "postgres"), isolation_level="AUTOCOMMIT")
-        try:
-            with admin.connect() as connection:
-                connection.execute(text("SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                                        "WHERE datname = :db AND pid <> pg_backend_pid()"), {"db": self.database})
-                connection.execute(text(f'DROP DATABASE IF EXISTS "{self.database}"'))
-                connection.execute(text(f'CREATE DATABASE "{self.database}"'))
-        finally:
-            admin.dispose()
-        env = isolated_env(self.log_dir, DATABASE_URL=self.database_url)
+        prepare_allocation_database(self.postgres_url, self.database)
+        env = isolated_env(self.log_dir, DATABASE_URL=self.migrator_url)
         result = subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=REPO_ROOT, env=env,
                                 capture_output=True, text=True, timeout=120)
         if result.returncode != 0:
