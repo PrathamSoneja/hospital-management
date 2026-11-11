@@ -11,6 +11,7 @@ Implements:
 """
 import hashlib
 import json
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
@@ -27,6 +28,7 @@ from services.bed_allocation.db import (
     AllocationModel, IdempotencyModel, OperationRecoveryModel, OutboxEventModel,
     OutboxStreamCounterModel,
 )
+from services.bed_allocation.lease_renewal import LeaseRenewer
 from services.bed_allocation.models import AllocationResponse, CreateAllocationRequest, ReleaseResponse
 from shared.generated.common_pb2 import MutationContext
 from shared.observability.errors import AppException
@@ -144,6 +146,7 @@ class BedAllocationDomainService:
         lock_lease_ms: int = 10000,
         lock_wait_timeout_ms: int = 5000,
         recovery_claim_seconds: int = 60,
+        lock_renewal: bool = True,
     ):
         self.session_factory = session_factory
         self.patient_client = patient_client
@@ -156,6 +159,9 @@ class BedAllocationDomainService:
         self.lock_wait_timeout_ms = lock_wait_timeout_ms
         # How long a request/recovery claim stays exclusive; must exceed the longest workflow step.
         self.recovery_claim_seconds = recovery_claim_seconds
+        self.lock_renewal = lock_renewal
+        self._renewers: dict[str, LeaseRenewer] = {}  # lock_id -> renewer shared by holders of that lease
+        self._renewers_lock = threading.Lock()
 
     def _hash_payload(self, payload: dict) -> str:
         serialized = json.dumps(payload, sort_keys=True)
@@ -450,13 +456,7 @@ class BedAllocationDomainService:
             session.commit()
 
         try:
-            lease = self.lock_client.acquire(
-                pool_id=req.pool_id,
-                owner_id=self.owner_id,
-                acquire_id=f"acq-{allocation_id}",
-                lease_ms=self.lock_lease_ms,
-                wait_timeout_ms=self.lock_wait_timeout_ms,
-            )
+            lease = self._acquire_pool_lease(req.pool_id, f"acq-{allocation_id}")
         except Exception as error:
             # Keep the action in progress: resetting to CHECK_PRIORITY would forget an outstanding
             # step (e.g. an enqueue whose outcome is unknown) and could orphan its queue entry.
@@ -515,14 +515,7 @@ class BedAllocationDomainService:
                     with self.session_factory() as session:
                         record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
                         bed_id = record.bed_id
-                    ctx_bed = MutationContext(
-                        operation_id=bed_operation_id,
-                        request_id=request_id,
-                        pool_id=req.pool_id,
-                        lock_id=lease.lock_id,
-                        owner_id=lease.owner_id,
-                        fencing_token=lease.fencing_token,
-                    )
+                    ctx_bed = self._promotion_context(bed_operation_id, request_id, lease)
                     try:
                         bed_ok, _, bed_error = self.bed_client.allocate_bed(ctx_bed, bed_id, allocation_id)
                     except Exception as error:
@@ -552,14 +545,7 @@ class BedAllocationDomainService:
                         allocation_id, "ASSIGN_STAFF", staff_operation_id, "ASSIGN_STAFF", "INTENDED",
                         {"bed_id": bed_id},
                     )
-                    ctx_staff = MutationContext(
-                        operation_id=staff_operation_id,
-                        request_id=request_id,
-                        pool_id=req.pool_id,
-                        lock_id=lease.lock_id,
-                        owner_id=lease.owner_id,
-                        fencing_token=lease.fencing_token,
-                    )
+                    ctx_staff = self._promotion_context(staff_operation_id, request_id, lease)
                     try:
                         staff_ok, staff_assignment_id, staff_id, staff_error = self.staff_client.assign_staff(
                             ctx_staff, allocation_id, bed_id
@@ -612,14 +598,7 @@ class BedAllocationDomainService:
                         allocation_id, "COMPENSATE_BED", compensation_id, "COMPENSATE_BED", "INTENDED",
                         {"bed_id": bed_id, "expected_allocation_id": allocation_id},
                     )
-                    ctx_comp = MutationContext(
-                        operation_id=compensation_id,
-                        request_id=request_id,
-                        pool_id=req.pool_id,
-                        lock_id=lease.lock_id,
-                        owner_id=lease.owner_id,
-                        fencing_token=lease.fencing_token,
-                    )
+                    ctx_comp = self._promotion_context(compensation_id, request_id, lease)
                     try:
                         released, _ = self.bed_client.release_bed(ctx_comp, bed_id, allocation_id)
                     except Exception as error:
@@ -652,14 +631,7 @@ class BedAllocationDomainService:
                         allocation_id, "ENQUEUE_WAITLIST", enqueue_id, "ENQUEUE_WAITLIST", "INTENDED",
                         {"admission_id": req.admission_id, "pool_id": req.pool_id},
                     )
-                    ctx_enq = MutationContext(
-                        operation_id=enqueue_id,
-                        request_id=request_id,
-                        pool_id=req.pool_id,
-                        lock_id=lease.lock_id,
-                        owner_id=lease.owner_id,
-                        fencing_token=lease.fencing_token,
-                    )
+                    ctx_enq = self._promotion_context(enqueue_id, request_id, lease)
                     try:
                         entry = self.triage_client.enqueue(ctx_enq, allocation_id, req.admission_id)
                     except Exception as error:
@@ -688,7 +660,7 @@ class BedAllocationDomainService:
             operation_id = f"{allocation_id}:{action.lower().replace('_', '-')}"
             return self._mark_recovering(allocation_id, action, operation_id, action, error)
         finally:
-            lease_released = self.lock_client.release(lease.lock_id, lease.owner_id)
+            lease_released = self._release_pool_lease(lease)
 
         if not lease_released:
             return self._mark_recovering(
@@ -789,13 +761,13 @@ class BedAllocationDomainService:
                 self._defer_promotion(allocation_id)
                 return
         try:
-            lease = self.lock_client.acquire(pool_id, self.owner_id, f"acq-promotion-{uuid.uuid4().hex}", self.lock_lease_ms, self.lock_wait_timeout_ms)
+            lease = self._acquire_pool_lease(pool_id, f"acq-promotion-{uuid.uuid4().hex}")
         except Exception:
             return
         try:
             self._promote_next_locked(allocation_id, lease, request_id)
         finally:
-            self.lock_client.release(lease.lock_id, lease.owner_id)
+            self._release_pool_lease(lease)
 
     def _allocation_snapshot(self, allocation_id: str) -> AllocationResponse:
         with self.session_factory() as session:
@@ -945,7 +917,38 @@ class BedAllocationDomainService:
             allocation_wait_ms=_elapsed_ms(candidate.created_at, now), occupancy_delta=1,
         )
 
+    def _acquire_pool_lease(self, pool_id, acquire_id):
+        """Acquire the pool lease and keep it renewed until _release_pool_lease."""
+        started = time.monotonic()
+        lease = self.lock_client.acquire(pool_id, self.owner_id, acquire_id, self.lock_lease_ms, self.lock_wait_timeout_ms)
+        with self._renewers_lock:
+            renewer = self._renewers.get(lease.lock_id)
+            if renewer is not None:
+                renewer.refs += 1  # the Coordinator returned a lease this process already holds
+                return lease
+            renewer = LeaseRenewer(self.lock_client, lease, self.lock_lease_ms, started, enabled=self.lock_renewal)
+            self._renewers[lease.lock_id] = renewer
+        renewer.start()
+        return lease
+
+    def _release_pool_lease(self, lease) -> bool:
+        """Stop renewal first, then release; a shared lease is released by its last holder only."""
+        with self._renewers_lock:
+            renewer = self._renewers.get(lease.lock_id)
+            if renewer is not None:
+                renewer.refs -= 1
+                if renewer.refs > 0:
+                    return True
+                del self._renewers[lease.lock_id]
+        if renewer is not None:
+            renewer.stop()
+        return self.lock_client.release(lease.lock_id, lease.owner_id)
+
     def _promotion_context(self, operation_id, request_id, lease):
+        """MutationContext for every lock-protected remote mutation; refuses once ownership is lost."""
+        renewer = self._renewers.get(lease.lock_id)
+        if renewer is not None:
+            renewer.ensure_held()
         return MutationContext(operation_id=operation_id, request_id=request_id, pool_id=lease.pool_id,
             lock_id=lease.lock_id, owner_id=lease.owner_id, fencing_token=lease.fencing_token)
 
@@ -1207,7 +1210,7 @@ class BedAllocationDomainService:
             data = json.loads(record.workflow_data or "{}")
             pool_id, bed_id, assignment_id = record.pool_id, record.bed_id, record.staff_assignment_id
         try:
-            lease = self.lock_client.acquire(pool_id, self.owner_id, f"acq-release-{uuid.uuid4().hex}", self.lock_lease_ms, self.lock_wait_timeout_ms)
+            lease = self._acquire_pool_lease(pool_id, f"acq-release-{uuid.uuid4().hex}")
         except Exception as error:
             return self._mark_recovering(allocation_id, "RELEASE_BED", f"{allocation_id}:release-bed", "RELEASE_BED", error)
         released = False
@@ -1247,7 +1250,7 @@ class BedAllocationDomainService:
         except Exception as error:
             return self._mark_recovering(allocation_id, "RELEASE_BED" if not released else "PROMOTE", f"{allocation_id}:release-recovery", "RELEASE", error)
         finally:
-            self.lock_client.release(lease.lock_id, lease.owner_id)
+            self._release_pool_lease(lease)
 
     def cancel_allocation(self, allocation_id: str, reason: str, request_id: str, idempotency_key: Optional[str] = None):
         endpoint = f"POST /api/v1/allocations/{allocation_id}/cancel"
@@ -1265,7 +1268,7 @@ class BedAllocationDomainService:
                 record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).first()
                 data = json.loads(record.workflow_data or "{}")
                 pool_id, reason = record.pool_id, data.get("reason", "cancelled")
-            lease = self.lock_client.acquire(pool_id, self.owner_id, f"acq-cancel-{uuid.uuid4().hex}", self.lock_lease_ms, self.lock_wait_timeout_ms)
+            lease = self._acquire_pool_lease(pool_id, f"acq-cancel-{uuid.uuid4().hex}")
         except Exception as error:
             return self._mark_recovering(allocation_id, "CANCEL_QUEUE", f"{allocation_id}:cancel-waitlist", "CANCEL_QUEUE", error)
         try:
@@ -1291,7 +1294,7 @@ class BedAllocationDomainService:
                 session.commit()
                 return response
         finally:
-            self.lock_client.release(lease.lock_id, lease.owner_id)
+            self._release_pool_lease(lease)
 
     def get_allocation(self, allocation_id: str) -> AllocationResponse:
         with self.session_factory() as session:
