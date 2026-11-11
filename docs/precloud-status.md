@@ -1,7 +1,8 @@
 # Pre-GCP Status: Allocation, Triage, Load, Observability (Pratham)
 
-Updated 2026-11-11. Branch `feature/precloud-renewal` from merged `master` (`4c12fd2`). Local commits only;
-nothing pushed. Current results were produced at `ba2461d` (see "Revision"). Results from 2026-11-06 are kept
+Updated 2026-11-11. Branch `feature/precloud-renewal` from merged `master` (`4c12fd2`). The branch was pushed at `2aac6a0`
+(PR open). The CI fix `1a9ed1d` and this documentation are local and **not pushed**. Rows are at `ba2461d` unless marked
+`1a9ed1d` (see "Revision"). Results from 2026-11-06 are kept
 below as labelled history. `docs/handoff.md` sections dated before 2026-11-06 are historical.
 
 **Status:** the Pratham-owned pre-GCP work is implemented and locally verified, with these exceptions:
@@ -64,7 +65,8 @@ Main working tree (Ruchir's uncommitted `outputs.tf` edit present but untouched)
 
 | Check | Command | Result | Evidence | Status |
 |---|---|---|---|---|
-| Full suite, integration required | `python -m tests.sandbox.cli verify` (`REQUIRE_INTEGRATION=1`) | **167 passed, 1 xfailed (strict, documented Staff defect), 0 failed** | `F\junit.xml`, `F\verify.log` | VERIFIED |
+| Full suite, integration required (`1a9ed1d`) | `python -m tests.sandbox.cli verify` (`REQUIRE_INTEGRATION=1`) | **168 passed, 1 xfailed, 0 failed**. The xfail is `tests/test_service_boundaries.py::test_staff_scheduler_boundary_with_allocation_adapter` (strict; the documented Staff Scheduler defect, unchanged). 0 unhandled-thread warnings; the remaining warnings are third-party or pre-existing (Google Python 3.11 notices, Starlette `httpx` deprecation, Firestore positional filter) | `.sandbox\final-1a9ed1d\junit.xml`, `full.log` | VERIFIED |
+| Same-key create race (PR CI failure, `1a9ed1d`) | `tests/test_allocation_workflow_claims.py::test_matching_retry_committed_between_idempotency_and_active_checks_replays`; cross-process test repeated | The deterministic test forces a matching commit between the idempotency and active-admission checks; it failed (`ACTIVE_ALLOCATION_EXISTS`) before the fix and passes after. Mismatch and different-key refusals still hold. `test_idempotent_replay_conflict_and_concurrent_retries` passed **10/10** after the fix (6/6 locally before it; the race was timing-dependent) | same | VERIFIED |
 | Migrations and runtime privileges | `tests/test_migrations_postgres.py` | 3 passed: empty -> `04` without drift; 02 -> `04` with legacy rows; `04` -> 02 -> `04`; `allocation_app` DML ok, DDL refused, default privileges, revoke on rollback | same | VERIFIED |
 | Lease renewal | `tests/test_lease_renewal.py` | 8 passed: renew beyond expiry; refusal; unreachable until actual expiry; renewal disabled; gRPC `Renew`; workflow longer than the lease; lost lease -> no mutation, then recovery with the stable operation ID; shared lease. A mutation test (guard removed) fails | same | VERIFIED (Coordinator double) |
 | Demo controls | `tests/integration/test_sandbox_demo_controls.py`, `tests/test_runtime_config.py` | rejected outside demo mode (400) and in production (startup); `lock=false` refused by fenced stand-ins then recovered; paused non-renewing holder loses its 5 s lease while another holder proceeds; invariants hold | same | VERIFIED |
@@ -80,7 +82,7 @@ Main working tree (Ruchir's uncommitted `outputs.tf` edit present but untouched)
 | Load: contention (latency) | same | p95 **12.6 s > 8 s bound** (k6 exit 99). k6 shows the time is server-side waiting (connect ~40 ms) and serialized under the pool lock. The 2026-11-06 code `2032c31` gives p95 12.8 s on this machine today (it was 4.9 s on 2026-11-06), so the cause is the environment, not today's changes. Bound not relaxed | `F\latency-investigation-20261111\` | FAILED (environment) |
 | Load: sustained multi-pool | same | 2,877 requests, checks 99.87% (3 Triage PUT 504 after retries), p95 5.0 s; audit: 30 ALLOCATED / 246 WAITLISTED / 275 RELEASED, 0 unsettled, 6 outbox streams gap-free and drained | `F\load-evidence\` | VERIFIED (MOCK dependencies) |
 | Observability | same (`observability.json`) | 3/3 targets up; Grafana healthy; Grafana -> Prometheus proxy returns data; endpoint labels are route templates; 4,550 JSON log lines carry k6 request IDs | `F\load-evidence\observability.json` | VERIFIED (local) |
-| GitHub Actions CI | `.github/workflows/ci.yml` | **NOT OBSERVED.** No `gh`; the API returns 403 for the private repository. The reported failing step (Terraform) was reproduced and fixed locally | - | NOT OBSERVED |
+| GitHub Actions CI | `.github/workflows/ci.yml` | **Not observed directly** (no `gh`; API 403). User-reported PR run at `2aac6a0`: 1 failed (the same-key race above), 166 passed, 1 xfailed. The fix `1a9ed1d` is not pushed, so no CI run has covered it | - | NOT OBSERVED |
 | Lock Coordinator / Bed Registry (Nisarg / Jay) | - | Branches `feature/lock-coordinator` and `feature/bed-registry-and-analytics` are **not merged**; compatibility not run | - | PENDING |
 | GKE, HPA, Cloud Logging, real brokers | - | - | - | EXTERNAL BLOCKER |
 
@@ -152,7 +154,8 @@ ehearsal.log` | VERIFIED |
 
 ## Revision
 
-Current: `ba2461d` on `feature/precloud-renewal` (from `origin/master` `4c12fd2`), plus this documentation commit. The tree is
+Current: `1a9ed1d` on `feature/precloud-renewal` (from `origin/master` `4c12fd2`), plus this documentation commit; most rows were
+produced at `ba2461d`, the only intervening change being the race fix and its tests. The tree is
 dirty only because of Ruchir's uncommitted `infra/terraform/outputs.tf` edit, which is carried over and not committed. A stale,
 duplicate `.gitignore` edit from the old local `master` was saved to the session scratchpad and dropped, because `origin/master`
 already contains every line of it. Historical: `2032c31` (clean rehearsal clone, 2026-11-06).
