@@ -34,6 +34,7 @@ ENV = {  # sandbox Compose endpoints (tests/sandbox/compose.yaml)
     "FIRESTORE_EMULATOR_HOST": "localhost:48080",
     "PUBSUB_EMULATOR_HOST": "localhost:48085",
     "SANDBOX_KAFKA_BOOTSTRAP": "localhost:49092",
+    "ZK_TEST_HOSTS": "localhost:42181",
 }
 PROMETHEUS = "http://localhost:49090"
 GRAFANA = "http://localhost:43000"
@@ -45,7 +46,7 @@ def run(command, check=True, **kwargs):
 
 
 def infra_up(observability: bool = True):
-    services = ["postgres", "firestore", "pubsub", "kafka"] + (["prometheus", "grafana"] if observability else [])
+    services = ["postgres", "firestore", "pubsub", "kafka", "zookeeper"] + (["prometheus", "grafana"] if observability else [])
     run(COMPOSE + ["up", "-d", *services])
     wait_until(lambda: run(COMPOSE + ["exec", "-T", "postgres", "pg_isready", "-U", "postgres"], check=False,
                            capture_output=True).returncode == 0, 120, what="PostgreSQL")
@@ -56,6 +57,16 @@ def infra_up(observability: bool = True):
         from confluent_kafka.admin import AdminClient
         return bool(AdminClient({"bootstrap.servers": ENV["SANDBOX_KAFKA_BOOTSTRAP"]}).list_topics(timeout=5).brokers)
     wait_until(kafka_ready, 180, interval=2, what="Kafka")
+
+    def zookeeper_ready():
+        from kazoo.client import KazooClient
+        client = KazooClient(hosts=ENV["ZK_TEST_HOSTS"])
+        try:
+            client.start(timeout=5)
+            return True
+        finally:
+            client.stop()
+    wait_until(zookeeper_ready, 120, interval=2, what="ZooKeeper")
     # The unit/PostgreSQL tests use temporary schemas inside this disposable database.
     run(COMPOSE + ["exec", "-T", "postgres", "sh", "-c",
                    "psql -U postgres -tAc \"SELECT 1 FROM pg_database WHERE datname='hospital_allocation_unit_test'\" "
