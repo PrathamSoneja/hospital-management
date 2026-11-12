@@ -45,6 +45,11 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
     ports: ["49092:9092"]
     tmpfs: [/tmp/kraft-combined-logs]
+  
+  zookeeper:
+    image: zookeeper:3.9
+    ports: ["42181:2181"]
+    tmpfs: [/data, /datalog]
 
   prometheus:
     image: prom/prometheus:v2.50.0

@@ -1,0 +1,139 @@
+# Lock Coordinator (Nisarg, task f): 2 replicas sharing all lock state through ZooKeeper.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lock-coordinator
+  labels:
+    app.kubernetes.io/name: lock-coordinator
+    app.kubernetes.io/part-of: hospital-bed-management
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: lock-coordinator
+  template:
+    metadata:
+      labels:
+        app: lock-coordinator
+        app.kubernetes.io/name: lock-coordinator
+        app.kubernetes.io/part-of: hospital-bed-management
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: lock-coordinator-sa
+      automountServiceAccountToken: false
+      # SIGTERM stops the server and closes the ZooKeeper session, which frees this pod's locks.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: lock-coordinator
+      containers:
+        - name: lock-coordinator
+          image: lock-coordinator
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http-rest
+              containerPort: 8000
+            - name: grpc-internal
+              containerPort: 50051
+          env:
+            - name: ZK_HOSTS
+              value: zookeeper-0.zookeeper-headless:2181,zookeeper-1.zookeeper-headless:2181,zookeeper-2.zookeeper-headless:2181
+            - name: LOCK_GRPC_PORT
+              value: "50051"
+            - name: LOCK_REST_PORT
+              value: "8000"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http-rest
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http-rest
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Ready only while connected to ZooKeeper.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http-rest
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+# Bed Allocation and Triage already call lock-coordinator-service:50051 (staging .properties files).
+apiVersion: v1
+kind: Service
+metadata:
+  name: lock-coordinator-service
+  labels:
+    app.kubernetes.io/name: lock-coordinator
+spec:
+  type: ClusterIP
+  selector:
+    app: lock-coordinator
+  ports:
+    - name: http-rest
+      port: 8000
+      targetPort: 8000
+    - name: grpc-internal
+      port: 50051
+      targetPort: 50051
+---
+# Needs no Google Cloud access, so no Workload Identity annotation.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: lock-coordinator-sa
+automountServiceAccountToken: false
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: lock-coordinator-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: lock-coordinator

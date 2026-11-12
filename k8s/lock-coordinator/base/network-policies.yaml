@@ -1,0 +1,71 @@
+# Same model as k8s/base/network-policies.yaml: only this system's pods and the monitoring namespace get in.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: lock-coordinator-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: lock-coordinator
+  policyTypes: [Ingress]
+  ingress:
+    # Health checks, metrics and the lock inspector.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: hospital-bed-management
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8000
+          protocol: TCP
+    # Lock calls come from Bed Allocation and Triage.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: bed-allocation-service
+        - podSelector:
+            matchLabels:
+              app: triage-service
+      ports:
+        - port: 50051
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: zookeeper-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: zookeeper
+  policyTypes: [Ingress]
+  ingress:
+    # Only the Lock Coordinator talks to ZooKeeper.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: lock-coordinator
+      ports:
+        - port: 2181
+          protocol: TCP
+    # ZooKeeper nodes talk to each other: client, replication and leader election.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: zookeeper
+      ports:
+        - port: 2181
+          protocol: TCP
+        - port: 2888
+          protocol: TCP
+        - port: 3888
+          protocol: TCP
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 7000
+          protocol: TCP

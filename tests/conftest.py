@@ -29,7 +29,7 @@ from services.bed_allocation.db import Base
 from tests.sandbox.fixtures import api, pool, sandbox  # noqa: F401  (one session sandbox for all suites)
 
 REQUIRED_INTEGRATION_ENV = ("TEST_POSTGRES_URL", "FIRESTORE_EMULATOR_HOST", "SANDBOX_KAFKA_BOOTSTRAP",
-                            "PUBSUB_EMULATOR_HOST")
+                            "PUBSUB_EMULATOR_HOST","ZK_TEST_HOSTS")
 
 
 def _integration_required() -> bool:
