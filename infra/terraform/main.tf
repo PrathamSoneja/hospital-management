@@ -3,6 +3,7 @@ locals {
     "artifactregistry.googleapis.com",
     "compute.googleapis.com",
     "container.googleapis.com",
+    "dataproc.googleapis.com",
     "eventarc.googleapis.com",
     "firestore.googleapis.com",
     "iam.googleapis.com",
@@ -158,6 +159,23 @@ module "iam" {
   depends_on = [
     google_project_service.required,
     module.gke,
+  ]
+}
+
+module "dataproc" {
+  source = "./modules/dataproc"
+
+  project_id     = var.project_id
+  cluster_name   = "${var.name_prefix}-dataproc-flink"
+  region         = var.region
+  subnetwork     = module.network.subnet_name
+  staging_bucket = module.storage.flink_bucket
+  labels         = var.resource_labels
+
+  depends_on = [
+    google_project_service.required,
+    module.network,
+    module.storage,
   ]
 }
 

@@ -44,7 +44,6 @@ jobs:
           for spec in contracts/openapi/*.yaml; do python -m openapi_spec_validator "$spec"; done
           python scripts/compile_proto.py
           git diff --exit-code -- shared/generated
-
       - name: Terraform format and offline validation (no backend, no cloud credentials)
         run: |
           terraform fmt -check -recursive infra/terraform
@@ -63,8 +62,9 @@ jobs:
           mkdir -p rendered
           kubectl kustomize k8s/overlays/staging > rendered/staging.yaml
           kubectl kustomize k8s/jobs/allocation-migrate > rendered/migrate.yaml
+          kubectl kustomize k8s/lock-coordinator/overlays/staging > rendered/lock-coordinator.yaml
           docker run --rm -v "$PWD/rendered:/m:ro" "$KUBECONFORM_IMAGE" \
-            -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0 /m/staging.yaml /m/migrate.yaml
+            -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0 /m/staging.yaml /m/migrate.yaml /m/lock-coordinator.yaml
           # Templates intentionally hold placeholders; the release gate must reject them.
           if python scripts/check_release_config.py > rendered/release-gate.txt; then
             echo "release gate unexpectedly accepted placeholder templates"; exit 1
@@ -89,6 +89,7 @@ jobs:
           docker build -f services/bed_allocation/Dockerfile -t hospital-bed-allocation:ci .
           docker build -f services/triage/Dockerfile -t hospital-triage:ci .
           docker build -f services/patient_registry/Dockerfile -t hospital-patient-registry:ci .
+          docker build -f services/lock_coordinator/Dockerfile -t hospital-lock-coordinator:ci .
           # hospital_migration_empty_test is left at head by tests/test_migrations_postgres.py; smoke as the runtime role
           python scripts/smoke_image.py hospital-bed-allocation:ci \
             --database-url postgresql+psycopg2://allocation_app:sandbox-only@127.0.0.1:45432/hospital_migration_empty_test

@@ -1,0 +1,154 @@
+# 3-node ZooKeeper ensemble for the Lock Coordinator (Nisarg, task f). Quorum is 2, so one node can fail.
+# Headless Service: gives each pod a stable DNS name (zookeeper-0.zookeeper-headless, ...).
+apiVersion: v1
+kind: Service
+metadata:
+  name: zookeeper-headless
+  labels:
+    app.kubernetes.io/name: zookeeper
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true  # Nodes must find each other before any of them is ready.
+  selector:
+    app: zookeeper
+  ports:
+    - name: client
+      port: 2181
+    - name: follower
+      port: 2888
+    - name: election
+      port: 3888
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: zookeeper
+  labels:
+    app.kubernetes.io/name: zookeeper
+    app.kubernetes.io/part-of: hospital-bed-management
+spec:
+  serviceName: zookeeper-headless
+  replicas: 3
+  podManagementPolicy: Parallel  # Start all 3 together so they can elect a leader.
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: zookeeper
+  template:
+    metadata:
+      labels:
+        app: zookeeper
+        app.kubernetes.io/name: zookeeper
+        app.kubernetes.io/part-of: hospital-bed-management
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "7000"
+        prometheus.io/path: "/metrics"
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000  # The image's own "zookeeper" user.
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: zookeeper
+      containers:
+        - name: zookeeper
+          image: zookeeper:3.9
+          imagePullPolicy: IfNotPresent
+          # Pod zookeeper-0 gets ZooKeeper id 1, zookeeper-1 gets 2, and so on.
+          command: ["sh", "-c"]
+          args:
+            - export ZOO_MY_ID=$(( ${HOSTNAME##*-} + 1 )) && exec /docker-entrypoint.sh zkServer.sh start-foreground
+          env:
+            - name: ZOO_SERVERS
+              value: >-
+                server.1=zookeeper-0.zookeeper-headless:2888:3888;2181
+                server.2=zookeeper-1.zookeeper-headless:2888:3888;2181
+                server.3=zookeeper-2.zookeeper-headless:2888:3888;2181
+            - name: ZOO_4LW_COMMANDS_WHITELIST
+              value: "srvr,ruok,mntr"
+            # Prometheus metrics on port 7000, as in the design doc.
+            - name: ZOO_CFG_EXTRA
+              value: >-
+                metricsProvider.className=org.apache.zookeeper.metrics.prometheus.PrometheusMetricsProvider
+                metricsProvider.httpPort=7000
+            - name: JVMFLAGS
+              value: "-Xms256m -Xmx256m"
+          ports:
+            - name: client
+              containerPort: 2181
+            - name: follower
+              containerPort: 2888
+            - name: election
+              containerPort: 3888
+            - name: metrics
+              containerPort: 7000
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: datalog
+              mountPath: /datalog
+            - name: logs
+              mountPath: /logs
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              memory: 512Mi
+          # Ready once it has joined the ensemble as leader or follower.
+          readinessProbe:
+            exec:
+              command: ["zkServer.sh", "status"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: client
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false  # The image writes zoo.cfg into /conf at startup.
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: datalog
+          emptyDir:
+            sizeLimit: 512Mi
+        - name: logs
+          emptyDir:
+            sizeLimit: 128Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+---
+# Never take down more than one node at a time, so the quorum of 2 survives node upgrades.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: zookeeper-pdb
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: zookeeper

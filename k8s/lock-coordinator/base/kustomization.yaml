@@ -1,0 +1,11 @@
+# Nisarg-owned workloads (Lock Coordinator + its ZooKeeper ensemble). The image comes from an overlay.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+labels:
+  - pairs:
+      app.kubernetes.io/managed-by: argocd
+    includeSelectors: false
+resources:
+  - zookeeper.yaml
+  - lock-coordinator.yaml
+  - network-policies.yaml
