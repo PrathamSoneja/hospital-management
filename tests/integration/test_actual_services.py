@@ -296,7 +296,7 @@ def test_stale_tokens_are_refused_by_real_bed_registry_and_triage(real, api, poo
     lock.Release(lock_pb2.ReleaseLockRequest(lock_id=new.lock_id, owner_id=new.owner_id), timeout=5)
 
 
-# ---------- Lock Coordinator replicas (confirmed defects, owner: Nisarg) ----------
+# ---------- Lock Coordinator replicas (defects found here, fixed by PR #11) ----------
 
 @pytest.fixture(scope="module")
 def coordinator_replicas(real):
@@ -322,11 +322,8 @@ def _acquire(stub, pool, owner, acquire_id, wait_ms):
         return error.code().name
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "Lock Coordinator defect (Nisarg): Acquire's find_request then join_queue is not atomic, so simultaneous "
-    "calls with the same owner/acquire_id each create a queue entry; one is granted and the duplicates wait "
-    "behind it until DEADLINE_EXCEEDED. Safety holds (one grant); the retry cannot learn it holds the lease."))
 def test_simultaneous_same_acquire_id_across_replicas_returns_one_lease(coordinator_replicas, pool):
+    """Before PR #11 the duplicates queued behind their own lease until DEADLINE_EXCEEDED."""
     barrier = threading.Barrier(6)
 
     def call(index):
@@ -342,11 +339,8 @@ def test_simultaneous_same_acquire_id_across_replicas_returns_one_lease(coordina
     assert all(isinstance(r, tuple) for r in results), results  # every same-ID call returns that lease
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "Lock Coordinator defect (Nisarg): when a waiting Acquire and its same-acquire_id retry (another replica) "
-    "reach the head together, both call zk_store.start_lease; the loser's versioned set raises an uncaught "
-    "BadVersionError, returned as UNKNOWN. Proposed fix: docs/proposed-fixes/lock-coordinator-start-lease.patch."))
 def test_waiting_acquire_and_its_retry_both_receive_the_lease(coordinator_replicas, pool):
+    """Before PR #11 the loser of the concurrent start_lease got UNKNOWN (uncaught BadVersionError)."""
     first, second = coordinator_replicas
     holder = first.Acquire(lock_pb2.AcquireLockRequest(pool_id=pool, owner_id="it-holder", acquire_id="h",
                                                        lease_ms=5000, wait_timeout_ms=1000), timeout=5)
@@ -362,3 +356,25 @@ def test_waiting_acquire_and_its_retry_both_receive_the_lease(coordinator_replic
             first.Release(lock_pb2.ReleaseLockRequest(lock_id=result[0], owner_id="it-owner"), timeout=5)
             break
     assert all(isinstance(r, tuple) for r in results) and results[0] == results[1], results
+
+
+def test_release_racing_renewal_across_replicas_never_leaves_a_live_lease(coordinator_replicas, pool):
+    """Allocation stops its renewer before releasing; even if a late Renew races the Release on another
+    replica, the lease ends released (retry-safe) and can no longer be renewed or validated."""
+    first, second = coordinator_replicas
+    for attempt in range(10):
+        owner = f"it-race-{attempt}"
+        lease = first.Acquire(lock_pb2.AcquireLockRequest(pool_id=pool, owner_id=owner, acquire_id=f"{pool}-{attempt}",
+                                                          lease_ms=3000, wait_timeout_ms=3000), timeout=6)
+        with ThreadPoolExecutor(2) as executor:
+            renewed = executor.submit(second.Renew, lock_pb2.RenewLockRequest(
+                lock_id=lease.lock_id, owner_id=owner, lease_ms=3000), timeout=5)
+            released = executor.submit(first.Release, lock_pb2.ReleaseLockRequest(
+                lock_id=lease.lock_id, owner_id=owner), timeout=5)
+            assert released.result().success
+            renewed.result()  # either outcome is fine while the release is in flight
+        assert second.Release(lock_pb2.ReleaseLockRequest(lock_id=lease.lock_id, owner_id=owner), timeout=5).success
+        assert not second.Renew(lock_pb2.RenewLockRequest(lock_id=lease.lock_id, owner_id=owner, lease_ms=3000),
+                                timeout=5).success
+        assert not first.Validate(lock_pb2.ValidateLockRequest(lock_id=lease.lock_id, owner_id=owner, pool_id=pool,
+                                                               fencing_token=lease.fencing_token), timeout=5).valid
