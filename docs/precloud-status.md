@@ -1,6 +1,6 @@
 # Pre-GCP Status: Allocation, Triage, Load, Observability (Pratham)
 
-Updated 2026-11-12. **Combined tree tested:** `fc7a378` on local branch `integration/precloud-combined`, plus this
+Updated 2026-11-12. **Combined tree tested:** `2471995` (master `a53227a` merged; CI-mode run below). Load and suite rows marked `f4090d8`/`fc7a378` predate that merge. Local branch `integration/precloud-combined`, plus this
 documentation commit. That tree is `origin/master` `1739e57` (PRs #6 Bed Registry, #9 Lock Coordinator, #10
 Notification, #11 Coordinator hardening) merged with `feature/precloud-renewal` `285703b` (open PR #8) and the
 local commits listed under "What changed". The branch is in the worktree `..\hm-combined`; nothing is pushed or
@@ -14,10 +14,20 @@ real Lock Coordinator (ZooKeeper), Bed Registry and Patient Registry. Exceptions
 - **Before the Triage fix:** contention latency exceeded 8 s in 3 of 4 runs and sustained load failed to settle in 2 of 4 (history below).
 - **Not run here:** anything on GKE, Cloud Logging, or cloud brokers.
 
-**GitHub CI (observed through the public API):**
-- PR #8 at `285703b`: `checks` success.
-- `master` `1739e57`: `checks` **failure** at step 14 "Load procedure" (tests passed before it; images step skipped). The cause is not visible without authenticated logs/artifacts. `22e1060` was success.
-- The combined tree has not been pushed, so no CI run covers it.
+**Update 2026-11-12 (evening): master `a53227a` (#12 GitOps/GKE manifests and Confluent Terraform, #13 Lock observability) merged locally as `1115f83`.**
+- **Merge:** one conflict, in `.github/workflows/ci.yml`. It keeps master's `bootstrap_k8s` validation and `-lockfile=readonly`, which `bootstrap_k8s` passes on Linux. Nothing else conflicted.
+- **CI failure on PR #8 at `451b901`:** `checks` failed at step 12, "Start sandbox infrastructure"; tests, load and images were skipped.
+  - **Cause (as reported):** a Grafana host-port collision. Publishing `43000`, or any fixed host port, can fail on a runner where that port is in use. The fixed sandbox ports (42181–49092) also sit inside Linux's ephemeral range. I could not reproduce the collision here: Docker Desktop on Windows started Grafana even with 43000/49090 held, and the runner logs need authentication.
+  - **Fix (`2471995`):** `tests/sandbox/compose.ci.yaml` resets the Prometheus/Grafana port publications when `SANDBOX_INTERNAL_OBSERVABILITY=1` (set in `ci.yml`). The CLI then queries `http://prometheus:9090` and `http://grafana:3000` from inside the Compose network (`docker compose exec prometheus wget`). Local runs keep 49090/43000.
+  - **Port audit:** Postgres 45432, Firestore 48080, Pub/Sub 48085, Kafka 49092 (its advertised listener) and ZooKeeper 42181 stay published, because the host-run tests and services need them; residual risk is recorded.
+- **Local CI-mode run (`checks` job steps, host ports 43000/49090 held, `2471995` with only an uncommitted runbook edit):** every step passed (`C\ci-local\`).
+  - Full suite: 245 passed, 2 xfailed.
+  - Load: contention 10/40 with p95 6.94 s; sustained 0 unsettled.
+  - Prometheus: 6/6 targets up, queried in-network.
+  - Grafana: 200, with datasource, dashboard and proxied query.
+  - kubeconform: 53 valid across 7 renders.
+  - Image smoke checks: pass.
+- **GitHub CI:** not run on these commits (not pushed). PR #8 at `451b901`: failure (above). Master `a53227a`: no check runs (see the `main`/`master` mismatch below).
 
 ## What changed (local commits on the combined tree)
 
@@ -66,6 +76,30 @@ real Lock Coordinator (ZooKeeper), Bed Registry and Patient Registry. Exceptions
 - **Stand-in Staff state:** it is in memory and is lost only if that process restarts. The load procedure never restarts it; the loss appeared only in a manual resume experiment, which was also invalid because it used a new Firestore project. Recovery code was not weakened, and the stand-in was not changed (not needed to settle).
 - **Settings:** no timeout, window, worker count or bound was changed.
 
+## Cross-component consistency after #12/#13 (owners act; nothing changed here unless marked)
+
+| Area | Finding | Owner |
+|---|---|---|
+| Branches | Repository default is `master`, but `ci.yml` push trigger, `publish-gke-images`, `gitops/bootstrap/root-application.yaml` and `gitops/apps/*` target `main`. Master pushes run no CI, and ArgoCD would track a branch that does not exist | Ruchir |
+| ArgoCD | Two trees. `gitops/apps` (Lock `gke`, Patient, Staff; namespace `hospital-system`) versus `k8s/argocd/` (Allocation/Triage `staging`, migration Job, and Lock `staging`). Registering both Lock apps would give two Applications managing the same resources. Allocation/Triage are not in the app-of-apps | Ruchir + Nisarg + Pratham (decide one tree) |
+| Kafka (Confluent) | Allocation config matches Terraform: `bed-events`, write role, secret names `kafka-allocation-sasl-*` mounted by CSI. Values are recorded in runbook section 6 (runbook updated) | Ruchir provides outputs/credentials |
+| Flink / Analytics | `flink_job.sql` has no `security.protocol`/`sasl.*`, so it cannot reach Confluent Cloud. Duplicate counting is still open (strict xfail). Bed Registry/Analytics manifests are still in no deploy path | Jay |
+| Notification | Topic is now `bed-notifications`, which is Allocation's `PUBSUB_TOPIC_NOTIFICATIONS`. Cloud Run still has no `FIRESTORE_PROJECT_ID` (entrypoint `KeyError`) and its service account has no `roles/datastore.user`. Eventarc → Cloud Run delivery is unverified | Nisarg + Ruchir |
+| Lock / ZooKeeper | #13 adds PodMonitoring for the `gke` overlay. Allocation/Triage address `lock-coordinator-service:50051`, which resolves only within the same namespace (`hospital-system`) | Nisarg |
+| Release gate | Gates `k8s/argocd` paths only. `gitops/apps` overlays use tag promotion by commit SHA from CI, not digests, and are not gated | Ruchir (decide) |
+
+## Deployment values (exact; the remaining unknowns are marked)
+
+| Value | Setting | Source / owner | Acceptance check |
+|---|---|---|---|
+| Namespace | `hospital-system` | Terraform/`gitops` (Ruchir) | `kubectl kustomize k8s/overlays/staging` has no `PLACEHOLDER_K8S_NAMESPACE` |
+| Registry | `asia-south1-docker.pkg.dev/<PROJECT_ID>/hospital-repo/{bed-allocation,triage}@sha256:<digest>` | `PROJECT_ID` **unknown** (Ruchir); digests from `Push-Images.ps1` (Pratham) | `check_release_config.py` exit 0 |
+| Lock / Bed / Staff / Patient / Triage | `lock-coordinator-service:50051`, `bed-registry-service:50053`, `staff-scheduler-service:50051`, `http://patient-registry-service:8000/api/v1`, `triage-service:50051` | manifests | `tests/acceptance` in real-endpoint mode; Triage `/readyz` 200 |
+| Pub/Sub | `PUBSUB_PROJECT_ID=<PROJECT_ID>`, `PUBSUB_TOPIC_NOTIFICATIONS=bed-notifications` | Terraform | runbook section 10 event tests |
+| Kafka | `KAFKA_BOOTSTRAP_SERVERS=<confluent_bootstrap_endpoint host:9092>`, `KAFKA_TOPIC_BED_EVENTS=bed-events`, `SASL_SSL`, `PLAIN`; credentials as Secret Manager versions | Terraform outputs (Ruchir) | outbox backlog drains; `BED_ALLOCATED` on `bed-events` |
+| Cloud SQL | `CLOUD_SQL_INSTANCE_CONNECTION_NAME=<PROJECT_ID>:asia-south1:<instance>`; secrets `allocation-database-url`, `allocation-migration-database-url` (values **not created**) | Ruchir creates the users; Pratham runs the approved migration | migration Job at `20261031_04`; `/readyz` 200 |
+| Service accounts | `<NAME_PREFIX>-bed-allocation`, `<NAME_PREFIX>-triage` (`name_prefix` **unknown**) | Terraform | pods use Workload Identity; no key files |
+
 ## Scaffolding removed / retained
 
 - **Removed:** `scripts/local/Start-LocalStack.ps1`, `Stop-LocalStack.ps1`, `Invoke-LocalTests.ps1` (could no longer satisfy `REQUIRE_INTEGRATION`), `Invoke-LocalLoad.ps1`, the `.env.local` helpers in `LocalCommon.ps1`, and `docs/proposed-fixes/lock-coordinator-start-lease.patch` (superseded by #11). None was referenced elsewhere.
@@ -89,7 +123,7 @@ Bed 47451 (gRPC)/47401, Prometheus 49090, Grafana 43000.
 
 | Owner | Action |
 |---|---|
-| Pratham | Approve pushing the combined branch to update PR #8, then observe CI on it (master `1739e57` failed at the load step; this branch's load procedure now passes locally). Staging: image push, overlay values, approved migration, HPA/Cloud Logging run (runbook §11) |
+| Pratham | Approve pushing `2471995`+docs to update PR #8, then observe GitHub CI on it. Staging: image push, overlay values, approved migration, HPA/Cloud Logging run (runbook §11) |
 | Ruchir | Apply `docs/proposed-fixes/staff-scheduler-transaction-get.patch`, then remove its strict xfail. Add Patient/Staff manifests and confirm `staff-scheduler-service:50051`, `patient-registry-service:8000`. Terraform: notification Cloud Run SA lacks `roles/datastore.user`; container lacks `FIRESTORE_PROJECT_ID` (the entrypoint raises `KeyError` without it); kube-state/cAdvisor collection for the HPA and health panels. Kafka/Confluent decision with Jay. No plan/apply yet |
 | Jay | Bed Registry: manifests are not in any kustomization/ArgoCD app; Deployment has no database URL, so it silently uses in-memory SQLite (2 replicas, split state); it auto-seeds demo beds; it accepts token 0 on a pool with no fenced writes; CI does not build its image. Analytics: deduplicate by `event_id` (strict xfail) |
 | Nisarg | Notification: Firestore project env and datastore role as above; Eventarc → Cloud Run delivery unverified. PodMonitoring, ZooKeeper one-node-down demo and DLQ are his, in progress. Lock requests carry no request ID (no field in `lock.proto`) |
