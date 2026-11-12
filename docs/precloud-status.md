@@ -27,7 +27,11 @@ real Lock Coordinator (ZooKeeper), Bed Registry and Patient Registry. Exceptions
   - Grafana: 200, with datasource, dashboard and proxied query.
   - kubeconform: 53 valid across 7 renders.
   - Image smoke checks: pass.
-- **GitHub CI:** not run on these commits (not pushed). PR #8 at `451b901`: failure (above). Master `a53227a`: no check runs (see the `main`/`master` mismatch below).
+- **Terraform lock files:** PR #8 CI at `6ead4e5` failed at step 8, Terraform validation. `infra/terraform/bootstrap_k8s/.terraform.lock.hcl` (added by #12) held only `windows_amd64` `h1` checksums for hashicorp/google 6.50.0 and hashicorp/helm 2.17.0.
+  - **Fix:** commit `fix(terraform)` adds the `linux_amd64` `h1` checksums via `terraform providers lock -platform=windows_amd64 -platform=linux_amd64` (Terraform 1.15.8). Versions are unchanged, and the other two lock files already carried both platforms.
+  - **Reproduction:** not achieved locally. A clean Linux container passes read-only init with the old file too (fresh downloads are verified against `zh` hashes), and the CI log needs authentication.
+  - **Verification:** in a clean Linux container, all three roots pass `init -lockfile=readonly` and `validate`. The full local CI run passes every step (245 passed, 2 xfailed; load passed).
+- **GitHub CI:** not run on the commits after `6ead4e5` (not pushed). PR #8 at `451b901`: failure (above). Master `a53227a`: no check runs (see the `main`/`master` mismatch below).
 
 ## What changed (local commits on the combined tree)
 
