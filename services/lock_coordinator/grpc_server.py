@@ -27,14 +27,11 @@ class LockCoordinatorServicer(lock_pb2_grpc.LockCoordinatorServicer):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "pool_id, owner_id and lease_ms are required")
 
         started = zk_store.now_ms()
-        path = None
-        if request.acquire_id:  # A retry reuses its earlier place in line.
-            path = zk_store.find_request(self.zk, request.pool_id, request.owner_id, request.acquire_id)
-        if path is None:
-            path = zk_store.join_queue(
-                self.zk, request.pool_id, request.owner_id, request.acquire_id,
-                request.lease_ms, request.wait_timeout_ms,
-            )
+        # A retry reuses its earlier place in line, even when both copies arrive at the same moment.
+        path = zk_store.claim_place(
+            self.zk, request.pool_id, request.owner_id, request.acquire_id,
+            request.lease_ms, request.wait_timeout_ms,
+        )
 
         if not zk_store.wait_for_turn(self.zk, request.pool_id, path, request.wait_timeout_ms / 1000):
             zk_store.leave_queue(self.zk, path)  # Never block the requests behind us.
@@ -83,6 +80,7 @@ def reaper_loop(zk, stop):
     while not stop.wait(REAPER_INTERVAL_S):
         try:
             reaped = zk_store.reap_expired(zk, on_reap=record_reap)
+            zk_store.reap_tombstones(zk)
             if reaped:
                 logger.info("reaped %d expired lease(s)", reaped)
         except Exception:
