@@ -1,0 +1,25 @@
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: lock-coordinator
+spec:
+  selector:
+    matchLabels:
+      app: lock-coordinator
+  endpoints:
+    - port: http-rest
+      path: /metrics
+      interval: 30s
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: zookeeper
+spec:
+  selector:
+    matchLabels:
+      app: zookeeper
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s

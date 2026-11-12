@@ -13,6 +13,20 @@ scrape_configs:
         labels:
           service: "triage-service"
 
+  - job_name: "lock-coordinator"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["lock-coordinator-service:8000"]
+        labels:
+          service: "lock-coordinator"
+
+  - job_name: "zookeeper"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["zookeeper-1:7000", "zookeeper-2:7000", "zookeeper-3:7000"]
+        labels:
+          service: "zookeeper"
+
   - job_name: "bed-allocation-service"
     metrics_path: /metrics
     static_configs:
