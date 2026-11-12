@@ -171,7 +171,7 @@ def test_only_the_owner_can_release(replica):
 
     assert not replica.client.release(lease.lock_id, "mallory")
     assert replica.client.release(lease.lock_id, "alice")
-    assert not replica.client.release(lease.lock_id, "alice")
+    assert not replica.client.release(lease.lock_id, "mallory")  # Still not mallory's, even once released.
 
 
 def test_losing_the_session_frees_the_lock(hosts):
@@ -249,3 +249,102 @@ def test_inspector_shows_who_holds_and_who_waits(replica):
     assert POOL in http.get("/api/v1/locks").json()["pools"]
     assert http.get("/api/v1/locks/NO-SUCH-POOL").status_code == 404
     assert http.get("/readyz").status_code == 200
+def run_together(count, action):
+    """Start `count` threads that all call action() at the same moment. Return their results."""
+    barrier = threading.Barrier(count)
+    results = []
+    errors = []
+
+    def run():
+        barrier.wait()
+        try:
+            results.append(action())
+        except Exception as error:  # Surface thread errors in the test, not just the log.
+            errors.append(error)
+
+    threads = [threading.Thread(target=run) for _ in range(count)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    return results
+
+
+def test_simultaneous_retries_on_two_replicas_share_one_place_in_line(hosts):
+    first = Coordinator(hosts)
+    second = Coordinator(hosts)
+    try:
+        for attempt in range(10):
+            acquire_id = f"req-{attempt}"
+            replicas = iter([first, second])
+            leases = run_together(2, lambda: next(replicas).client.acquire(POOL, "alice", acquire_id, 60000, 5000))
+
+            assert leases[0].lock_id == leases[1].lock_id
+            assert leases[0].fencing_token == leases[1].fencing_token
+            assert len(zk_store.queue(first.zk, POOL)) == 1
+            assert first.client.release(leases[0].lock_id, "alice")
+    finally:
+        first.stop()
+        second.stop()
+
+
+def test_simultaneous_lease_starts_agree_on_one_expiry(replica):
+    path = zk_store.join_queue(replica.zk, POOL, "alice", "req-1", 60000, 1000)
+
+    expiries = run_together(5, lambda: zk_store.start_lease(replica.zk, path))
+
+    assert None not in expiries
+    assert len(set(expiries)) == 1
+
+
+def test_simultaneous_renews_all_succeed(replica):
+    lease = replica.client.acquire(POOL, "alice", "req-1", 60000, 1000)
+    request = lock_pb2.RenewLockRequest(lock_id=lease.lock_id, owner_id="alice", lease_ms=60000)
+
+    renewed = run_together(5, lambda: replica.stub.Renew(request).success)
+
+    assert renewed == [True] * 5
+
+
+def test_renew_is_refused_after_the_lease_expired(replica):
+    lease = replica.client.acquire(POOL, "alice", "req-1", 300, 1000)
+    time.sleep(0.6)
+
+    renewed = replica.stub.Renew(lock_pb2.RenewLockRequest(lock_id=lease.lock_id, owner_id="alice", lease_ms=60000))
+
+    assert not renewed.success
+    assert not replica.client.validate(lease.lock_id, "alice", POOL, lease.fencing_token)
+
+
+def test_a_retried_release_after_a_lost_reply_still_succeeds(replica):
+    lease = replica.client.acquire(POOL, "alice", "req-1", 60000, 1000)
+
+    assert replica.client.release(lease.lock_id, "alice")
+    assert replica.client.release(lease.lock_id, "alice")  # The retry, as if the first reply was lost.
+
+
+def test_simultaneous_releases_by_the_owner_all_succeed(replica):
+    lease = replica.client.acquire(POOL, "alice", "req-1", 60000, 1000)
+
+    released = run_together(5, lambda: replica.client.release(lease.lock_id, "alice"))
+
+    assert released == [True] * 5
+
+
+def test_release_reports_failure_if_the_lease_expired_first(replica):
+    lease = replica.client.acquire(POOL, "frozen", "req-1", 300, 1000)
+    deadline = time.monotonic() + 5
+    while zk_store.queue(replica.zk, POOL) and time.monotonic() < deadline:
+        time.sleep(0.1)  # Wait for the reaper.
+
+    assert not replica.client.release(lease.lock_id, "frozen")  # Tells Allocation it lost the lease.
+
+
+def test_claims_and_tombstones_are_cleaned_up(replica):
+    lease = replica.client.acquire(POOL, "alice", "req-1", 60000, 1000)
+    replica.client.release(lease.lock_id, "alice")
+
+    assert replica.zk.get_children(f"{zk_store.ACQUIRE_ROOT}/{POOL}") == []
+    assert zk_store.reap_tombstones(replica.zk, max_age_ms=0) == 1
+    assert replica.zk.get_children(f"{zk_store.RELEASED_ROOT}/{POOL}") == []
