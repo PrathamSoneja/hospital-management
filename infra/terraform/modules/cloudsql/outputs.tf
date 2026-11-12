@@ -14,6 +14,10 @@ output "patient_registry_username" {
   value = google_sql_user.patient_registry.name
 }
 
+output "patient_registry_migrator_username" {
+  value = google_sql_user.patient_registry_migrator.name
+}
+
 output "allocation_app_username" {
   value = google_sql_user.allocation_app.name
 }

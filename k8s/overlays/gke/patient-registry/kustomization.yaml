@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hospital-system
+resources:
+  - ../../../patient-registry/base
+configMapGenerator:
+  - name: patient-registry-config
+    options:
+      annotations:
+        argocd.argoproj.io/sync-wave: "-2"
+    literals:
+      - GCP_PROJECT_ID=PLACEHOLDER_PROJECT_ID
+      - CLOUD_SQL_INSTANCE_CONNECTION_NAME=PLACEHOLDER_PROJECT_ID:asia-south1:PLACEHOLDER_SQL_INSTANCE
+      - PATIENT_DOCUMENTS_BUCKET=PLACEHOLDER_PATIENT_DOCUMENTS_BUCKET
+images:
+  - name: patient-registry
+    newName: asia-south1-docker.pkg.dev/PLACEHOLDER_PROJECT_ID/hospital-repo/patient-registry
+    newTag: latest

@@ -39,6 +39,11 @@ locals {
       project_roles   = []
       bucket_roles    = {}
     }
+    zookeeper = {
+      kubernetes_name = "zookeeper-sa"
+      project_roles   = []
+      bucket_roles    = {}
+    }
     notification = {
       kubernetes_name = "notification-sa"
       project_roles   = []
@@ -182,4 +187,29 @@ resource "google_secret_manager_secret_iam_member" "patient_registry_accessor" {
   secret_id = var.patient_registry_secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.workloads["patient-registry"].email}"
+}
+
+resource "google_service_account" "patient_registry_migrator" {
+  project      = var.project_id
+  account_id   = trimsuffix(substr("${var.name_prefix}-pr-migrator", 0, 30), "-")
+  display_name = "GKE workload identity for Patient Registry migrations"
+}
+
+resource "google_service_account_iam_member" "patient_registry_migrator_workload_identity" {
+  service_account_id = google_service_account.patient_registry_migrator.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "serviceAccount:${var.workload_identity_pool}[${var.kubernetes_namespace}/patient-registry-migration-sa]"
+}
+
+resource "google_project_iam_member" "patient_registry_migrator_cloudsql_client" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.patient_registry_migrator.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "patient_registry_migrator_accessor" {
+  project   = var.project_id
+  secret_id = var.patient_registry_migration_secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.patient_registry_migrator.email}"
 }

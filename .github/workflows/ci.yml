@@ -3,7 +3,7 @@ name: Local CI
 on:
   pull_request:
   push:
-    branches: [master]
+    branches: [main]
 
 permissions:
   contents: read
@@ -47,7 +47,7 @@ jobs:
       - name: Terraform format and offline validation (no backend, no cloud credentials)
         run: |
           terraform fmt -check -recursive infra/terraform
-          for dir in infra/terraform infra/terraform/bootstrap; do
+          for dir in infra/terraform infra/terraform/bootstrap infra/terraform/bootstrap_k8s; do
             terraform -chdir="$dir" init -backend=false -input=false -lockfile=readonly
             terraform -chdir="$dir" validate -no-color
           done
@@ -63,8 +63,14 @@ jobs:
           kubectl kustomize k8s/overlays/staging > rendered/staging.yaml
           kubectl kustomize k8s/jobs/allocation-migrate > rendered/migrate.yaml
           kubectl kustomize k8s/lock-coordinator/overlays/staging > rendered/lock-coordinator.yaml
+          kubectl kustomize k8s/overlays/gke > rendered/gke-services.yaml
+          kubectl kustomize k8s/overlays/gke/patient-registry > rendered/gke-patient-registry.yaml
+          kubectl kustomize k8s/overlays/gke/staff-scheduler > rendered/gke-staff-scheduler.yaml
+          kubectl kustomize k8s/lock-coordinator/overlays/gke > rendered/gke-lock-coordinator.yaml
           docker run --rm -v "$PWD/rendered:/m:ro" "$KUBECONFORM_IMAGE" \
-            -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0 /m/staging.yaml /m/migrate.yaml /m/lock-coordinator.yaml
+            -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0 \
+            /m/staging.yaml /m/migrate.yaml /m/lock-coordinator.yaml \
+            /m/gke-services.yaml /m/gke-patient-registry.yaml /m/gke-staff-scheduler.yaml /m/gke-lock-coordinator.yaml
           # Templates intentionally hold placeholders; the release gate must reject them.
           if python scripts/check_release_config.py > rendered/release-gate.txt; then
             echo "release gate unexpectedly accepted placeholder templates"; exit 1
@@ -111,3 +117,125 @@ jobs:
       - name: Stop sandbox infrastructure
         if: always()
         run: python -m tests.sandbox.cli infra-down
+
+  publish-gke-images:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+    concurrency:
+      group: gke-image-promotion-main
+      cancel-in-progress: false
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      REGISTRY: asia-south1-docker.pkg.dev
+      AR_REPOSITORY: hospital-repo
+      IMAGE_TAG: ${{ github.sha }}
+      CLOUD_SQL_INSTANCE_CONNECTION_NAME: ${{ vars.CLOUD_SQL_INSTANCE_CONNECTION_NAME }}
+      PATIENT_DOCUMENTS_BUCKET: ${{ vars.PATIENT_DOCUMENTS_BUCKET }}
+      PATIENT_REGISTRY_GSA: ${{ vars.PATIENT_REGISTRY_GSA }}
+      PATIENT_REGISTRY_MIGRATION_GSA: ${{ vars.PATIENT_REGISTRY_MIGRATION_GSA }}
+      STAFF_SCHEDULER_GSA: ${{ vars.STAFF_SCHEDULER_GSA }}
+      LOCK_COORDINATOR_GSA: ${{ vars.LOCK_COORDINATOR_GSA }}
+      ZOOKEEPER_GSA: ${{ vars.ZOOKEEPER_GSA }}
+    steps:
+      - name: Check out the tested commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Authenticate to Google Cloud with Workload Identity Federation
+        id: gcp-auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_WIF_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Authenticate Docker to Artifact Registry
+        uses: docker/login-action@v3
+        with:
+          registry: asia-south1-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.gcp-auth.outputs.access_token }}
+
+      - name: Set up Kustomize
+        uses: imranismail/setup-kustomize@v2
+
+      - name: Build and push Patient Registry
+        run: |
+          docker build \
+            --file services/patient_registry/Dockerfile \
+            --tag "$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/patient-registry:$IMAGE_TAG" .
+          docker push "$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/patient-registry:$IMAGE_TAG"
+
+      - name: Build and push Staff Scheduler
+        run: |
+          docker build \
+            --file services/staff_scheduler/Dockerfile \
+            --tag "$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/staff-scheduler:$IMAGE_TAG" .
+          docker push "$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/staff-scheduler:$IMAGE_TAG"
+
+      - name: Update GitOps image references and project configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$PROJECT_ID"
+          test -n "$CLOUD_SQL_INSTANCE_CONNECTION_NAME"
+          test -n "$PATIENT_DOCUMENTS_BUCKET"
+          test -n "$PATIENT_REGISTRY_GSA"
+          test -n "$PATIENT_REGISTRY_MIGRATION_GSA"
+          test -n "$STAFF_SCHEDULER_GSA"
+          test -n "$LOCK_COORDINATOR_GSA"
+          test -n "$ZOOKEEPER_GSA"
+
+          (cd k8s/overlays/gke && kustomize edit set image \
+            "patient-registry=$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/patient-registry:$IMAGE_TAG" \
+            "staff-scheduler=$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/staff-scheduler:$IMAGE_TAG")
+
+          (cd k8s/overlays/gke/patient-registry && kustomize edit set image \
+            "patient-registry=$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/patient-registry:$IMAGE_TAG")
+          (cd k8s/overlays/gke/staff-scheduler && kustomize edit set image \
+            "staff-scheduler=$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/staff-scheduler:$IMAGE_TAG")
+          sed -i \
+            "s|PLACEHOLDER_PROJECT_ID:asia-south1:PLACEHOLDER_SQL_INSTANCE|$CLOUD_SQL_INSTANCE_CONNECTION_NAME|g" \
+            k8s/overlays/gke/patient-registry/kustomization.yaml
+          find k8s/patient-registry k8s/staff-scheduler \
+            k8s/overlays/gke k8s/lock-coordinator/overlays/gke -type f \
+            \( -name '*.yaml' -o -name '*.yml' \) -print0 |
+            xargs -0 sed -i "s|PLACEHOLDER_PROJECT_ID|$PROJECT_ID|g"
+          sed -i "s|PLACEHOLDER_PATIENT_DOCUMENTS_BUCKET|$PATIENT_DOCUMENTS_BUCKET|g" \
+            k8s/overlays/gke/patient-registry/kustomization.yaml
+          sed -i "s|PLACEHOLDER_PATIENT_REGISTRY_GSA|$PATIENT_REGISTRY_GSA|g" \
+            k8s/patient-registry/base/patient-registry.yaml
+          sed -i "s|PLACEHOLDER_PATIENT_REGISTRY_MIGRATION_GSA|$PATIENT_REGISTRY_MIGRATION_GSA|g" \
+            k8s/patient-registry/base/migration-job.yaml
+          sed -i "s|PLACEHOLDER_STAFF_SCHEDULER_GSA|$STAFF_SCHEDULER_GSA|g" \
+            k8s/staff-scheduler/base/staff-scheduler.yaml
+          sed -i "s|PLACEHOLDER_LOCK_COORDINATOR_GSA|$LOCK_COORDINATOR_GSA|g" \
+            k8s/lock-coordinator/overlays/gke/kustomization.yaml
+          sed -i "s|PLACEHOLDER_ZOOKEEPER_GSA|$ZOOKEEPER_GSA|g" \
+            k8s/lock-coordinator/overlays/gke/zookeeper-service-account.yaml
+
+      - name: Commit image promotion for ArgoCD
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if [ "$(git rev-parse origin/main)" != "$GITHUB_SHA" ]; then
+            echo "main advanced after this commit was tested; a newer run will promote its images."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add k8s/patient-registry k8s/staff-scheduler \
+            k8s/overlays/gke k8s/lock-coordinator/overlays/gke
+          if git diff --cached --quiet; then
+            echo "GitOps image references are already current."
+            exit 0
+          fi
+          git commit -m "chore(gitops): promote images ${IMAGE_TAG:0:12}"
+          git push origin HEAD:main

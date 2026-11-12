@@ -35,6 +35,9 @@ services:
     environment:
       ZOO_MY_ID: 1
       ZOO_SERVERS: server.1=zookeeper-1:2888:3888;2181 server.2=zookeeper-2:2888:3888;2181 server.3=zookeeper-3:2888:3888;2181
+      ZOO_4LW_COMMANDS_WHITELIST: srvr,ruok,mntr
+      # Prometheus metrics on port 7000, as in the design doc and the Kubernetes StatefulSet.
+      ZOO_CFG_EXTRA: metricsProvider.className=org.apache.zookeeper.metrics.prometheus.PrometheusMetricsProvider metricsProvider.httpPort=7000    
     ports:
       - "2181:2181"
 
@@ -44,6 +47,9 @@ services:
     environment:
       ZOO_MY_ID: 2
       ZOO_SERVERS: server.1=zookeeper-1:2888:3888;2181 server.2=zookeeper-2:2888:3888;2181 server.3=zookeeper-3:2888:3888;2181
+      ZOO_4LW_COMMANDS_WHITELIST: srvr,ruok,mntr
+      # Prometheus metrics on port 7000, as in the design doc and the Kubernetes StatefulSet.
+      ZOO_CFG_EXTRA: metricsProvider.className=org.apache.zookeeper.metrics.prometheus.PrometheusMetricsProvider metricsProvider.httpPort=7000
     ports:
       - "2182:2181"
 
@@ -53,8 +59,27 @@ services:
     environment:
       ZOO_MY_ID: 3
       ZOO_SERVERS: server.1=zookeeper-1:2888:3888;2181 server.2=zookeeper-2:2888:3888;2181 server.3=zookeeper-3:2888:3888;2181
+      ZOO_4LW_COMMANDS_WHITELIST: srvr,ruok,mntr
+      # Prometheus metrics on port 7000, as in the design doc and the Kubernetes StatefulSet.
+      ZOO_CFG_EXTRA: metricsProvider.className=org.apache.zookeeper.metrics.prometheus.PrometheusMetricsProvider metricsProvider.httpPort=7000    
     ports:
       - "2183:2181"
+
+  lock-coordinator-service:
+    profiles: [application]
+    build:
+      context: .
+      dockerfile: services/lock_coordinator/Dockerfile
+    container_name: hospital-lock-coordinator
+    environment:
+      ZK_HOSTS: zookeeper-1:2181,zookeeper-2:2181,zookeeper-3:2181
+    ports:
+      - "8010:8000"
+      - "50051:50051"
+    depends_on:
+      - zookeeper-1
+      - zookeeper-2
+      - zookeeper-3
 
   pubsub-emulator:
     image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators

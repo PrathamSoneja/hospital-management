@@ -1,0 +1,23 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: lock-coordinator
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: hospital-system
+  source:
+    repoURL: https://github.com/PrathamSoneja/hospital-management.git
+    targetRevision: main
+    path: k8s/lock-coordinator/overlays/gke
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hospital-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true

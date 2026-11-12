@@ -1,0 +1,8 @@
+# Optional, like k8s/components/managed-prometheus: scrape the Lock Coordinator and ZooKeeper with
+# Google Cloud Managed Service for Prometheus. Add `components: [../../components/managed-prometheus]`
+# to the staging overlay once managed collection is enabled on the cluster. Until then, an in-cluster
+# Prometheus uses the prometheus.io annotations already on both pod templates.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - podmonitoring.yaml
