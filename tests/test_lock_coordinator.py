@@ -3,16 +3,19 @@ import os
 import threading
 import time
 import uuid
-from concurrent import futures
 
 import grpc
 import pytest
 from kazoo.client import KazooClient
+from fastapi.testclient import TestClient
 from kazoo.exceptions import BadVersionError
+from prometheus_client import REGISTRY
+
 
 from services.bed_allocation.clients.grpc_clients import GrpcLockCoordinatorClient
 from services.lock_coordinator import zk_store
-from services.lock_coordinator.grpc_server import LockCoordinatorServicer, reaper_loop
+from services.lock_coordinator.grpc_server import create_server, reaper_loop
+from services.lock_coordinator.rest import build_app
 from shared.generated import lock_pb2, lock_pb2_grpc
 from shared.observability.errors import AppException
 
@@ -28,9 +31,7 @@ class Coordinator:
 
     def __init__(self, hosts):
         self.zk = zk_store.connect(hosts)
-        self.server = grpc.server(futures.ThreadPoolExecutor(max_workers=64))
-        lock_pb2_grpc.add_LockCoordinatorServicer_to_server(LockCoordinatorServicer(self.zk), self.server)
-        port = self.server.add_insecure_port("127.0.0.1:0")
+        self.server, port = create_server(self.zk, "127.0.0.1:0", workers=64)
         self.stop_reaper = threading.Event()
         threading.Thread(target=reaper_loop, args=(self.zk, self.stop_reaper), daemon=True).start()
         self.server.start()
@@ -210,3 +211,41 @@ def test_reaper_removes_an_abandoned_waiter(replica):
 
     assert zk_store.reap_expired(replica.zk) == 1
     assert zk_store.queue(replica.zk, POOL) == []
+
+
+def metric(name, **labels):
+    """Read one metric's current value, or 0 if it hasn't been recorded yet."""
+    return REGISTRY.get_sample_value(name, {"service": "lock-coordinator", **labels}) or 0
+
+
+def test_metrics_count_grants_timeouts_and_expiries(replica):
+    granted = metric("lock_acquire_total", pool_id=POOL, outcome="granted")
+    timeouts = metric("lock_acquire_total", pool_id=POOL, outcome="timeout")
+    expiries = metric("lease_expirations_total", pool_id=POOL)
+    deadline_errors = metric("grpc_requests_total", method="Acquire", code="DEADLINE_EXCEEDED")
+
+    replica.client.acquire(POOL, "frozen", "req-1", 500, 1000)
+    with pytest.raises(AppException):
+        replica.client.acquire(POOL, "bob", "req-2", 60000, 100)
+    replica.client.acquire(POOL, "next", "req-3", 60000, 5000)  # Waits for the reaper to clear "frozen".
+
+    assert metric("lock_acquire_total", pool_id=POOL, outcome="granted") == granted + 2
+    assert metric("lock_acquire_total", pool_id=POOL, outcome="timeout") == timeouts + 1
+    assert metric("lease_expirations_total", pool_id=POOL) == expiries + 1
+    assert metric("grpc_requests_total", method="Acquire", code="DEADLINE_EXCEEDED") == deadline_errors + 1
+    assert "lock_acquire_total" in TestClient(build_app(replica.zk)).get("/metrics").text
+
+
+def test_inspector_shows_who_holds_and_who_waits(replica):
+    holder = zk_store.join_queue(replica.zk, POOL, "alice", "req-1", 60000, 60000)
+    zk_store.start_lease(replica.zk, holder)
+    zk_store.join_queue(replica.zk, POOL, "bob", "req-2", 60000, 60000)
+    http = TestClient(build_app(replica.zk))
+
+    entries = http.get(f"/api/v1/locks/{POOL}").json()["entries"]
+
+    assert [(e["owner_id"], e["state"], e["position"]) for e in entries] == [("alice", "HOLDING", 0), ("bob", "WAITING", 1)]
+    assert entries[0]["fencing_token"] == str(zk_store.fencing_token(replica.zk, holder))
+    assert POOL in http.get("/api/v1/locks").json()["pools"]
+    assert http.get("/api/v1/locks/NO-SUCH-POOL").status_code == 404
+    assert http.get("/readyz").status_code == 200

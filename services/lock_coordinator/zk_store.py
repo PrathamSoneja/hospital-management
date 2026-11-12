@@ -12,6 +12,7 @@ LOCK_ROOT = "/locks"
 DEFAULT_HOSTS = "127.0.0.1:2181,127.0.0.1:2182,127.0.0.1:2183"
 LOCK_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]+/lock-[0-9]{10}")
 ABANDON_GRACE_MS = 5000
+POOL_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
 
 def connect(hosts=None):
     """Open a ZooKeeper session. Any of the listed copies can answer."""
@@ -145,8 +146,10 @@ def validate(client, path, owner_id, token):
 
 #“The reaper’s delete is conditional on the znode version, 
 # so a renewal that lands between its read and its delete makes the delete fail, and a live lease is never reaped.”
-def reap_expired(client):
-    """Delete every lock whose lease ran out. Return how many were deleted."""
+def reap_expired(client, on_reap=None):
+    """Delete every lock whose lease ran out. Return how many were deleted.
+    
+    on_reap, if given, is called with (pool_id, "lease" or "abandoned") for each one."""
     reaped = 0
     try:
         pools = client.get_children(LOCK_ROOT)
@@ -167,6 +170,8 @@ def reap_expired(client):
                 # The version check means a renew that got in first wins.
                 client.delete(path, version=stat.version)
                 reaped += 1
+                if on_reap:
+                    on_reap(pool_id, "abandoned" if data["expires_at"] is None else "lease")
             except (NoNodeError, BadVersionError):
                 pass
     return reaped
