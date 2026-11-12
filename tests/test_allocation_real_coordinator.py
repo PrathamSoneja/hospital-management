@@ -21,7 +21,7 @@ from services.bed_allocation.models import CreateAllocationRequest
 from services.bed_allocation.service import BedAllocationDomainService
 from services.triage.repository.memory import InMemoryTriageRepository
 from services.triage.service import TriageDomainService
-from tests.sandbox.runtime import REPO_ROOT, ManagedProcess, free_port, isolated_env
+from tests.sandbox.runtime import REPO_ROOT, ManagedProcess, free_port, http_json, isolated_env, wait_until
 from tests.support.allocation_fakes import (
     DirectTriageClient, FakeBedRegistryClient, FakePatientRegistryClient, FakeStaffSchedulerClient,
 )
@@ -40,7 +40,7 @@ def coordinator_addr():
         isolated_env(log_dir, ZK_HOSTS=hosts, LOCK_GRPC_PORT=grpc_port, LOCK_REST_PORT=rest_port),
         log_dir / "lock-coordinator.log", f"http://127.0.0.1:{rest_port}/readyz").start()
     try:
-        yield f"127.0.0.1:{grpc_port}"
+        yield f"127.0.0.1:{grpc_port}", f"http://127.0.0.1:{rest_port}"
     finally:
         process.stop()
 
@@ -107,7 +107,7 @@ def _expire_claims(sessions):
 
 
 def test_release_contract_owner_retry_and_wrong_owner(coordinator_addr):
-    lock = RecordingLockClient(coordinator_addr)
+    lock = RecordingLockClient(coordinator_addr[0])
     pool = f"P-RC-{uuid.uuid4().hex[:6]}"
     lease = lock.acquire(pool, "owner-a", f"acq-{uuid.uuid4().hex}", 5000, 1000)
     assert lock.release(lease.lock_id, "owner-b") is False          # wrong owner
@@ -118,12 +118,15 @@ def test_release_contract_owner_retry_and_wrong_owner(coordinator_addr):
     assert lock.renew(lease.lock_id, "owner-a", 5000) is None       # a released lease cannot be renewed
 
     reaped = lock.acquire(pool, "owner-a", f"acq-{uuid.uuid4().hex}", 1000, 1000)
-    time.sleep(2.5)                                                 # expires; the reaper deletes it, no tombstone
-    assert lock.release(reaped.lock_id, "owner-a") is False
+    # Wait until the reaper has actually deleted it (expired-but-unreaped may still be released by its owner).
+    wait_until(lambda: not any(e["lock_id"] == reaped.lock_id for e in
+                               (http_json("GET", f"{coordinator_addr[1]}/api/v1/locks/{pool}")[1] or {}).get("entries", [])),
+               15, what="the expired lease to be reaped")
+    assert lock.release(reaped.lock_id, "owner-a") is False         # reaped, no tombstone
 
 
 def test_lost_release_ack_resumes_once_under_a_fresh_lease(pg_sessions, coordinator_addr):
-    lock = RecordingLockClient(coordinator_addr)
+    lock = RecordingLockClient(coordinator_addr[0])
     service, pool, beds, staff = _service(pg_sessions, lock)
     lock.lose_next_release_ack = True
     first = service.create_allocation(CreateAllocationRequest(admission_id="adm-1", pool_id=pool), "req-1", "k1")
@@ -147,13 +150,16 @@ def test_lost_release_ack_resumes_once_under_a_fresh_lease(pg_sessions, coordina
 def test_release_false_for_a_reaped_lease_is_unconfirmed_cleanup_not_failure(pg_sessions, coordinator_addr):
     """Renewal off and a 1 s lease: the lock is reaped before release, so Release returns False (no
     tombstone). Confirmed outcomes stay; one recovery pass under a fresh lease settles it."""
-    lock = RecordingLockClient(coordinator_addr)
+    lock = RecordingLockClient(coordinator_addr[0])
     service, pool, beds, staff = _service(pg_sessions, lock, lock_lease_ms=1000, lock_renewal=False)
     original_assign = staff.assign_staff
 
     def slow_assign(context, allocation_id, bed_id):
         result = original_assign(context, allocation_id, bed_id)
-        time.sleep(2.5)  # the outcome is recorded by staff, then the lease is reaped
+        lease = lock.leases[-1]  # the outcome is recorded by staff, then the lease expires and is reaped
+        wait_until(lambda: not any(e["lock_id"] == lease.lock_id for e in (http_json(
+            "GET", f"{coordinator_addr[1]}/api/v1/locks/{pool}")[1] or {}).get("entries", [])), 15,
+            what="the expired lease to be reaped")
         return result
     staff.assign_staff = slow_assign
 
