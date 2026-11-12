@@ -15,6 +15,9 @@ const triageUrl = (__ENV.TRIAGE_URL || '').replace(/\/$/, '');
 const poolIds = (__ENV.POOL_IDS || '').split(',').map((value) => value.trim()).filter(Boolean);
 const perPool = Number(__ENV.ADMISSIONS_PER_POOL || 2000);
 const prefix = __ENV.ADMISSION_PREFIX || 'adm-load';
+// Real Patient Registry assigns admission IDs: ADMISSIONS_FILE is JSON {pool_id: [admission_id, ...]}
+// (written by scripts/seed_load_fixture.py). Without it, IDs are `${prefix}-${pool}-${n}` (sandbox stand-in).
+const seeded = __ENV.ADMISSIONS_FILE ? JSON.parse(open(__ENV.ADMISSIONS_FILE)) : null;
 const runId = __ENV.RUN_ID || `${Date.now()}`;
 const releaseAllocated = (__ENV.RELEASE_ALLOCATED || 'true') === 'true';
 
@@ -67,7 +70,7 @@ export default function () {
   if (n > perPool) {
     sleep(1);  // seeded admissions exhausted; keep reads only
   }
-  const admissionId = `${prefix}-${poolId}-${n}`;
+  const admissionId = seeded ? seeded[poolId][Math.min(n, perPool) - 1] : `${prefix}-${poolId}-${n}`;
   const requestId = `k6-${runId}-${sequence}`;
   const allocationUrl = allocationUrls[sequence % allocationUrls.length];
 

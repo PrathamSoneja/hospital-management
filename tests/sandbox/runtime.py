@@ -434,21 +434,11 @@ class Sandbox:
         fixture = dict(fixture)
         ids = {a["admission_id"]: a["admission_id"] for a in fixture.get("admissions", [])}
         if "bed" in self.actual:
-            for bed in fixture.pop("beds", []):
-                _expect(http_json("POST", f"{self.rest_url('bed')}/api/v1/beds", bed, timeout=10), 201, "bed seed")
-                self.seeded_beds.append(bed["bed_id"])
+            self.seeded_beds += seed_beds(self.rest_url("bed"), fixture.pop("beds", []))
         if "staff" in self.actual:
-            self._seed_staff(fixture.pop("staff_capacity", {}))
+            seed_staff(self.rest_url("staff"), fixture.pop("staff_capacity", {}))
         if "patient" in self.actual:
-            base = f"{self.rest_url('patient')}/api/v1"
-            for admission in fixture.pop("admissions", []):
-                key = f"seed-{self.run_id}-{admission['admission_id']}"
-                patient = _expect(http_json("POST", f"{base}/patients", {
-                    "first_name": "Fictional", "last_name": "Patient", "date_of_birth": "1980-01-01"},
-                    headers={"Idempotency-Key": f"{key}-p"}, timeout=10), 201, "patient seed")
-                created = _expect(http_json("POST", f"{base}/admissions", {"patient_id": patient["patient_id"]},
-                                            headers={"Idempotency-Key": f"{key}-a"}, timeout=10), 201, "admission seed")
-                ids[admission["admission_id"]] = created["admission_id"]
+            ids.update(seed_admissions(self.rest_url("patient"), fixture.pop("admissions", []), f"seed-{self.run_id}"))
         if any(fixture.get(k) for k in ("beds", "staff_capacity", "admissions")):
             _expect(http_json("POST", f"{self.deps_http}/admin/seed", fixture), 200, "dependency seed")
         for item in fixture.get("triage", []):
@@ -459,25 +449,6 @@ class Sandbox:
             if status != 200:
                 raise RuntimeError(f"triage seed failed for an admission: {status} {body}")
         return ids
-
-    def _seed_staff(self, capacity: dict):
-        """Real Staff Scheduler: nurses on a current shift whose concurrent limits sum to the capacity."""
-        now = datetime.now(timezone.utc)
-        shift = {"starts_at": (now - timedelta(hours=1)).isoformat(), "ends_at": (now + timedelta(hours=12)).isoformat()}
-        base = f"{self.rest_url('staff')}/api/v1"
-        for pool_id, remaining in capacity.items():
-            n = 0
-            while remaining > 0:
-                n += 1
-                staff_id, limit = f"nurse-{pool_id.lower()}-{n}", min(20, remaining)
-                remaining -= limit
-                _expect(http_json("POST", f"{base}/staff", {
-                    "staff_id": staff_id, "display_name": f"Fictional Nurse {n}", "pool_ids": [pool_id],
-                    "max_concurrent_assignments": limit}, headers={"Idempotency-Key": f"seed-{staff_id}"},
-                    timeout=10), 201, "staff seed")
-                _expect(http_json("PUT", f"{base}/staff/{staff_id}/shifts/current", shift,
-                                  headers={"Idempotency-Key": f"seed-{staff_id}-shift"}, timeout=10),
-                        (200, 201), "shift seed")
 
     def fault(self, rpc: str, mode: str, count: int = 1, delay_seconds: float | None = None):
         payload = {"rpc": rpc, "mode": mode, "count": count}
@@ -502,6 +473,48 @@ class Sandbox:
         return {"run_id": self.run_id, "database": self.database, "firestore_project": self.firestore_project,
                 "ports": self.ports, "topics": self.topics if self.events_enabled else None,
                 "pids": self.pids(), "log_dir": str(self.log_dir)}
+
+
+# ---------- seeding through the real services' own APIs (sandbox and approved test environments) ----------
+
+def seed_beds(bed_url: str, beds: list) -> list:
+    """Bed Registry REST; returns the bed IDs created."""
+    for bed in beds:
+        _expect(http_json("POST", f"{bed_url}/api/v1/beds", bed, timeout=10), 201, "bed seed")
+    return [bed["bed_id"] for bed in beds]
+
+
+def seed_staff(staff_url: str, capacity: dict):
+    """Staff Scheduler REST: nurses on a current shift whose concurrent limits sum to the capacity."""
+    now = datetime.now(timezone.utc)
+    shift = {"starts_at": (now - timedelta(hours=1)).isoformat(), "ends_at": (now + timedelta(hours=12)).isoformat()}
+    for pool_id, remaining in capacity.items():
+        n = 0
+        while remaining > 0:
+            n += 1
+            staff_id, limit = f"nurse-{pool_id.lower()}-{n}", min(20, remaining)
+            remaining -= limit
+            _expect(http_json("POST", f"{staff_url}/api/v1/staff", {
+                "staff_id": staff_id, "display_name": f"Fictional Nurse {n}", "pool_ids": [pool_id],
+                "max_concurrent_assignments": limit}, headers={"Idempotency-Key": f"seed-{staff_id}"},
+                timeout=10), 201, "staff seed")
+            _expect(http_json("PUT", f"{staff_url}/api/v1/staff/{staff_id}/shifts/current", shift,
+                              headers={"Idempotency-Key": f"seed-{staff_id}-shift"}, timeout=10),
+                    (200, 201), "shift seed")
+
+
+def seed_admissions(patient_url: str, admissions: list, key_prefix: str) -> dict:
+    """Patient Registry REST with fictional patients; returns {fixture admission ID: assigned admission ID}."""
+    ids = {}
+    for admission in admissions:
+        key = f"{key_prefix}-{admission['admission_id']}"
+        patient = _expect(http_json("POST", f"{patient_url}/api/v1/patients", {
+            "first_name": "Fictional", "last_name": "Patient", "date_of_birth": "1980-01-01"},
+            headers={"Idempotency-Key": f"{key}-p"}, timeout=10), 201, "patient seed")
+        created = _expect(http_json("POST", f"{patient_url}/api/v1/admissions", {"patient_id": patient["patient_id"]},
+                                    headers={"Idempotency-Key": f"{key}-a"}, timeout=10), 201, "admission seed")
+        ids[admission["admission_id"]] = created["admission_id"]
+    return ids
 
 
 def _expect(result, statuses, what):
