@@ -74,7 +74,6 @@ def upgrade() -> None:
             name="uq_patient_idempotency_endpoint_key",
         ),
     )
-    op.execute("GRANT CONNECT ON DATABASE patients TO patient_registry")
     op.execute("GRANT USAGE ON SCHEMA public TO patient_registry")
     op.execute(
         "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public "
@@ -84,22 +83,22 @@ def upgrade() -> None:
         "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO patient_registry"
     )
     op.execute(
-        "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public "
+        "ALTER DEFAULT PRIVILEGES FOR ROLE patient_registry_migrator IN SCHEMA public "
         "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO patient_registry"
     )
     op.execute(
-        "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public "
+        "ALTER DEFAULT PRIVILEGES FOR ROLE patient_registry_migrator IN SCHEMA public "
         "GRANT USAGE, SELECT ON SEQUENCES TO patient_registry"
     )
 
 
 def downgrade() -> None:
     op.execute(
-        "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public "
+        "ALTER DEFAULT PRIVILEGES FOR ROLE patient_registry_migrator IN SCHEMA public "
         "REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLES FROM patient_registry"
     )
     op.execute(
-        "ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public "
+        "ALTER DEFAULT PRIVILEGES FOR ROLE patient_registry_migrator IN SCHEMA public "
         "REVOKE USAGE, SELECT ON SEQUENCES FROM patient_registry"
     )
     op.drop_table("idempotency_keys")
@@ -117,4 +116,3 @@ def downgrade() -> None:
         "REVOKE USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public FROM patient_registry"
     )
     op.execute("REVOKE USAGE ON SCHEMA public FROM patient_registry")
-    op.execute("REVOKE CONNECT ON DATABASE patients FROM patient_registry")
