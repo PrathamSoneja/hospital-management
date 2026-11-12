@@ -72,6 +72,22 @@
       ]
     },
     {
+      "title": "Lock Coordinator: Acquire Outcomes and Lease Expiry",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(lock_acquire_total{service=\"lock-coordinator\"}[1m])) by (outcome)",
+          "legendFormat": "acquire {{outcome}}"
+        },
+        {
+          "expr": "sum(rate(lease_expirations_total{service=\"lock-coordinator\"}[1m]))",
+          "legendFormat": "leases expired (not released)"
+        }
+      ]
+    },
+    {
       "title": "Transactional Outbox Backlog",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -108,6 +124,26 @@
         {
           "expr": "sum(rate(container_cpu_usage_seconds_total{container=~\"(bed-allocation|triage)\"}[1m])) by (container)",
           "legendFormat": "{{container}} CPU cores"
+        },
+        {
+          "expr": "sum(container_memory_working_set_bytes{container=~\"(bed-allocation|triage)\"}) by (container)",
+          "legendFormat": "{{container}} memory bytes"
+        }
+      ]
+    },
+    {
+      "title": "Kubernetes Health: Available Replicas and Restarts",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+      "targets": [
+        {
+          "expr": "kube_deployment_status_replicas_available{deployment=~\"bed-allocation-service|triage-service|lock-coordinator\"}",
+          "legendFormat": "{{deployment}} available"
+        },
+        {
+          "expr": "sum(increase(kube_pod_container_status_restarts_total{container=~\"bed-allocation|triage|lock-coordinator|zookeeper\"}[10m])) by (container)",
+          "legendFormat": "{{container}} restarts (10m)"
         }
       ]
     }

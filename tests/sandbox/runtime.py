@@ -226,6 +226,7 @@ class Sandbox:
             self.ports.setdefault(key, free_port())
         for index in range(self.allocators):
             self.ports.setdefault(f"allocator_{index}", free_port())
+        self.seeded_beds: list[str] = []  # bed IDs seeded into the real Bed Registry
         unknown = set(self.actual) - set(ACTUAL_SERVICES)
         if unknown or ("lock" in self.actual and not self.zk_hosts):
             raise ValueError(f"bad actual services {sorted(unknown)} or missing zk_hosts")
@@ -435,6 +436,7 @@ class Sandbox:
         if "bed" in self.actual:
             for bed in fixture.pop("beds", []):
                 _expect(http_json("POST", f"{self.rest_url('bed')}/api/v1/beds", bed, timeout=10), 201, "bed seed")
+                self.seeded_beds.append(bed["bed_id"])
         if "staff" in self.actual:
             self._seed_staff(fixture.pop("staff_capacity", {}))
         if "patient" in self.actual:
@@ -486,7 +488,15 @@ class Sandbox:
             raise RuntimeError(f"fault injection failed: {body}")
 
     def dependency_state(self) -> dict:
-        return http_json("GET", f"{self.deps_http}/admin/state")[1]
+        """Stand-in state; bed ownership comes from the real Bed Registry when it is used, and staff
+        assignments are omitted for the real Staff Scheduler (it has no listing API)."""
+        state = http_json("GET", f"{self.deps_http}/admin/state")[1]
+        if "bed" in self.actual:
+            state["beds"] = [_expect(http_json("GET", f"{self.rest_url('bed')}/api/v1/beds/{bed_id}", timeout=10),
+                                     200, "bed read") for bed_id in self.seeded_beds]
+        if "staff" in self.actual:
+            state.pop("assignments", None)
+        return state
 
     def describe(self) -> dict:
         return {"run_id": self.run_id, "database": self.database, "firestore_project": self.firestore_project,

@@ -3,7 +3,7 @@ Local sandbox command line (TEST-ONLY). Used directly, by scripts/local/Sandbox.
 
     python -m tests.sandbox.cli infra-up        # disposable Postgres, Firestore, Pub/Sub, Kafka (+Prometheus/Grafana)
     python -m tests.sandbox.cli verify          # full pytest suite against the sandbox; skips fail
-    python -m tests.sandbox.cli up              # start deps + Triage + 2 allocators, seed, run until Ctrl+C
+    python -m tests.sandbox.cli up              # real Lock+Bed, stand-ins, Triage, 2 allocators; seed; Ctrl+C
     python -m tests.sandbox.cli load            # reset -> seed -> readiness -> k6 -> audit -> evidence
     python -m tests.sandbox.cli infra-down      # remove only the hospital-sandbox Compose project
 
@@ -29,7 +29,12 @@ from tests.sandbox.runtime import (DEMO_ENV, EXPIRY_DEMO_ENV, REPO_ROOT, Sandbox
 COMPOSE = ["docker", "compose", "-f", str(REPO_ROOT / "tests" / "sandbox" / "compose.yaml")]
 K6_IMAGE = "grafana/k6:0.54.0"
 PORTS = {"deps_grpc": 47051, "deps_http": 47080, "triage_rest": 47101, "triage_grpc": 47151,
-         "allocator_0": 47201, "allocator_1": 47202}
+         "allocator_0": 47201, "allocator_1": 47202,
+         "lock_rest": 47301, "lock_grpc": 47351, "bed_rest": 47401, "bed_grpc": 47451}
+# Real Lock Coordinator (ZooKeeper) and Bed Registry. k6 fixtures address admissions by fixed ID, so
+# Patient (server-assigned IDs) and Staff (documented defect) stay stand-ins here;
+# tests/integration/test_actual_services.py covers the real Patient and Staff paths.
+LOAD_ACTUAL = ("lock", "bed")
 ENV = {  # sandbox Compose endpoints (tests/sandbox/compose.yaml)
     "TEST_POSTGRES_URL": "postgresql+psycopg2://postgres:sandbox-only@127.0.0.1:45432/hospital_allocation_unit_test",
     "FIRESTORE_EMULATOR_HOST": "localhost:48080",
@@ -83,9 +88,10 @@ def sandbox_env():
     os.environ.update(ENV)
 
 
-def new_sandbox(log_dir: Path, profile_env: dict | None = None) -> Sandbox:
+def new_sandbox(log_dir: Path, profile_env: dict | None = None, actual: tuple = LOAD_ACTUAL) -> Sandbox:
     sandbox_env()
     return Sandbox(allocator_overrides={i: dict(profile_env or {}) for i in range(2)},
+                   actual=actual, zk_hosts=ENV["ZK_TEST_HOSTS"],
                    postgres_url=ENV["TEST_POSTGRES_URL"], database="hospital_sandbox_load_test",
                    firestore_host=ENV["FIRESTORE_EMULATOR_HOST"], pubsub_host=ENV["PUBSUB_EMULATOR_HOST"],
                    kafka_bootstrap=ENV["SANDBOX_KAFKA_BOOTSTRAP"], log_dir=log_dir, allocators=2,
@@ -101,9 +107,10 @@ def verify(extra_args):
                check=False, env=env).returncode
 
 
-def up(fixture: str, profile: str):
+def up(fixture: str, profile: str, deps: str):
     profile_env = {"normal": None, "demo": DEMO_ENV, "expiry-demo": EXPIRY_DEMO_ENV}[profile]
-    sandbox = new_sandbox(REPO_ROOT / ".sandbox" / "interactive", profile_env)
+    sandbox = new_sandbox(REPO_ROOT / ".sandbox" / "interactive", profile_env,
+                          LOAD_ACTUAL if deps == "actual" else ())
     sandbox.start()
     try:
         sandbox.seed(fixture_contention() if fixture == "contention" else fixture_multipool(admissions_per_pool=200))
@@ -221,7 +228,7 @@ def load(sustained_duration: str, vus: int) -> int:
         time.sleep(12)  # at least two Prometheus scrapes after the run
         manifest["observability"] = _observability(sandbox, out)
         (out / "dependencies-state-summary.json").write_text(json.dumps(
-            {k: v for k, v in sandbox.dependency_state().items() if k in ("calls", "fence_rejections", "lock_acquisitions")}, indent=2))
+            {k: v for k, v in sandbox.dependency_state().items() if k in ("calls", "fence_rejections")}, indent=2))
     except Exception as error:
         failures.append(f"procedure error: {error!r}")
     finally:
@@ -229,7 +236,8 @@ def load(sustained_duration: str, vus: int) -> int:
         manifest["finished_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
         manifest["failures"] = failures
         manifest["limitations"] = [
-            "Lock/Bed/Staff/Patient are shared test stand-ins (tests/support/sandbox_dependencies.py), not teammate services.",
+            "Lock Coordinator (local ZooKeeper) and Bed Registry are the real services; Staff and Patient are "
+            "stand-ins (tests/support/sandbox_dependencies.py) fenced against the real Coordinator.",
             "Single machine, two allocator processes: not GKE, HPA, or distributed-lock evidence.",
             "Kafka and Pub/Sub are local emulators/containers, not the production brokers.",
         ]
@@ -252,6 +260,8 @@ def main():
     up_parser.add_argument("--fixture", choices=["contention", "multipool"], default="contention")
     up_parser.add_argument("--profile", choices=["normal", "demo", "expiry-demo"], default="normal",
                            help="demo: accept pause_ms/lock=false; expiry-demo: also 5 s lease without renewal")
+    up_parser.add_argument("--deps", choices=["actual", "standins"], default="actual",
+                           help="actual: real Lock Coordinator and Bed Registry (needs infra-up ZooKeeper)")
     load_parser = sub.add_parser("load")
     load_parser.add_argument("--duration", default="2m")
     load_parser.add_argument("--vus", type=int, default=20)
@@ -265,7 +275,7 @@ def main():
     elif args.command == "verify":
         sys.exit(verify(args.pytest_args))
     elif args.command == "up":
-        up(args.fixture, args.profile)
+        up(args.fixture, args.profile, args.deps)
     elif args.command == "load":
         sys.exit(load(args.duration, args.vus))
 

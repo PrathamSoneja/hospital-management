@@ -64,20 +64,9 @@ def pool(request):
     return f"P-{name}-{uuid.uuid4().hex[:6]}"
 
 
-def _registry_state(sb, pool, beds):
-    """Ownership as the real Bed Registry reports it (plus stand-in staff assignments when used)."""
-    state = {"beds": []}
-    for n in range(1, beds + 1):
-        status, bed, _ = http_json("GET", f"{sb.rest_url('bed')}/api/v1/beds/{pool}-bed-{n:02d}")
-        assert status == 200, bed
-        state["beds"].append(bed)
-    if "staff" not in sb.actual:
-        state["assignments"] = sb.dependency_state()["assignments"]
-    return state
-
-
 def _invariants(sb, pool, beds):
-    report = audit(sb.database_url, _registry_state(sb, pool, beds), pools=[pool])
+    """Durable invariants; bed ownership as the real Bed Registry reports it."""
+    report = audit(sb.database_url, sb.dependency_state(), pools=[pool])
     assert report["violations"] == [], report
     return report
 
