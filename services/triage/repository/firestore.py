@@ -28,6 +28,10 @@ class FirestoreTriageRepository(TriageRepository):
         self.operation_col = self.client.collection("queue_operation_results")
         self.pool_fence_col = self.client.collection("pool_fence_state")
         self.triage_idempotency_col = self.client.collection("triage_idempotency")
+        # admission_id -> {"allocation_id"} of its active waitlist entry. Transactions read it by key: a query
+        # inside a transaction locks a range of waitlist_entries, which made queue mutations in different
+        # pools block one another (emulator: multi-second waits and lock timeouts).
+        self.admission_index_col = self.client.collection("waitlist_admission_index")
 
     @staticmethod
     def _dependency_call(callable_, *args, **kwargs):
@@ -85,16 +89,12 @@ class FirestoreTriageRepository(TriageRepository):
                 return TriageUpdateResult(TriageRecord(**stored["response"]), True)
 
             triage_snapshot = triage_ref.get(transaction=transaction)
-            queue_query = self.waitlist_col.where("admission_id", "==", record.admission_id)
-            queue_snapshots = list(transaction.get(queue_query))
+            queue_snapshot = self._active_entry(transaction, record.admission_id)
             fence_snapshot = fence_ref.get(transaction=transaction)
 
             current_triage = TriageRecord(**triage_snapshot.to_dict()) if triage_snapshot.exists else None
             if current_triage and current_triage.pool_id != record.pool_id:
                 raise AppException("POOL_CHANGE_NOT_SUPPORTED", "pool_id is immutable after triage creation", status.HTTP_409_CONFLICT)
-            if len(queue_snapshots) > 1:
-                raise AppException("STATE_CONFLICT", "Multiple active queue entries exist for this admission", status.HTTP_409_CONFLICT)
-            queue_snapshot = queue_snapshots[0] if queue_snapshots else None
             queue_entry = queue_snapshot.to_dict() if queue_snapshot else None
             if queue_entry and (
                 queue_entry.get("admission_id") != record.admission_id
@@ -122,6 +122,14 @@ class FirestoreTriageRepository(TriageRepository):
             return TriageUpdateResult(record, False)
 
         return self._dependency_call(apply, self.client.transaction())
+
+    def _active_entry(self, transaction, admission_id: str):
+        """The admission's active waitlist document (snapshot) via the index, using key reads only."""
+        index = self.admission_index_col.document(admission_id).get(transaction=transaction)
+        if not index.exists:
+            return None
+        entry = self.waitlist_col.document(index.to_dict()["allocation_id"]).get(transaction=transaction)
+        return entry if entry.exists else None
 
     def get_active_waitlist_by_admission(self, admission_id: str) -> Optional[WaitlistEntry]:
         docs = self._dependency_call(lambda: list(self.waitlist_col.where("admission_id", "==", admission_id).limit(1).stream(timeout=1.0)))
@@ -158,8 +166,7 @@ class FirestoreTriageRepository(TriageRepository):
             fence_snapshot = fence_ref.get(transaction=transaction)
             target_snapshot = doc_ref.get(transaction=transaction)
             triage_snapshot = self.triage_col.document(entry.admission_id).get(transaction=transaction)
-            admission_query = self.waitlist_col.where("admission_id", "==", entry.admission_id).limit(1)
-            admission_snapshots = list(transaction.get(admission_query))
+            active_snapshot = None if target_snapshot.exists else self._active_entry(transaction, entry.admission_id)
             new_fence = fence_for_new_mutation(context, fence_snapshot.to_dict() if fence_snapshot.exists else None)
             if not triage_snapshot.exists:
                 raise AppException("NOT_FOUND", "Cannot enqueue without an established triage record", status.HTTP_404_NOT_FOUND)
@@ -168,8 +175,8 @@ class FirestoreTriageRepository(TriageRepository):
                 raise AppException("STATE_CONFLICT", "Triage changed before enqueue; retry with current triage", status.HTTP_409_CONFLICT)
             if target_snapshot.exists:
                 saved, existed = WaitlistEntry(**target_snapshot.to_dict()), True
-            elif admission_snapshots:
-                saved, existed = WaitlistEntry(**admission_snapshots[0].to_dict()), True
+            elif active_snapshot is not None:
+                saved, existed = WaitlistEntry(**active_snapshot.to_dict()), True
             else:
                 saved, existed = entry, False
 
@@ -185,6 +192,7 @@ class FirestoreTriageRepository(TriageRepository):
             }
             if not existed:
                 transaction.set(doc_ref, saved.model_dump())
+                transaction.set(self.admission_index_col.document(entry.admission_id), {"allocation_id": entry.allocation_id})
             transaction.set(operation_ref, operation)
             transaction.set(fence_ref, new_fence)
             return saved, existed, False
@@ -239,6 +247,8 @@ class FirestoreTriageRepository(TriageRepository):
             fence = fence_snapshot.to_dict() if fence_snapshot.exists else None
             new_fence = fence_for_new_mutation(context, fence)
             entry = queue_snapshot.to_dict() if queue_snapshot.exists else None
+            index_ref = self.admission_index_col.document(entry["admission_id"]) if entry else None
+            index_snapshot = index_ref.get(transaction=transaction) if index_ref else None
             if entry is not None and (
                 entry.get("allocation_id") != allocation_id
                 or entry.get("pool_id") != context.pool_id
@@ -265,6 +275,8 @@ class FirestoreTriageRepository(TriageRepository):
             }
             if entry:
                 transaction.delete(queue_ref)
+                if index_snapshot.exists and index_snapshot.to_dict().get("allocation_id") == allocation_id:
+                    transaction.delete(index_ref)
             transaction.set(operation_ref, operation)
             transaction.set(fence_ref, new_fence)
             return QueueMutationResult(success=bool(entry), replayed=False)
