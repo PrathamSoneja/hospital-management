@@ -59,6 +59,10 @@ variable "patient_registry_secret_id" {
   type = string
 }
 
+variable "patient_registry_migration_secret_id" {
+  type = string
+}
+
 variable "notification_topic_id" {
   type = string
 }

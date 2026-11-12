@@ -1,0 +1,16 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: hospital-system
+  namespace: argocd
+spec:
+  description: Hospital Management application workloads in the hospital-system namespace.
+  sourceRepos:
+    - https://github.com/PrathamSoneja/hospital-management.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: hospital-system
+  clusterResourceWhitelist: []
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"

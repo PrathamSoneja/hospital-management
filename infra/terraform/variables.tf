@@ -22,7 +22,7 @@ variable "github_branch" {
 variable "kubernetes_namespace" {
   description = "Namespace used by the app-of-apps service workloads and their Kubernetes service accounts."
   type        = string
-  default     = "default"
+  default     = "hospital-system"
 }
 
 variable "confluent_cloud_api_key" {
@@ -60,13 +60,13 @@ variable "confluent_region" {
 variable "region" {
   description = "GCP region for regional resources and the zonal GKE cluster."
   type        = string
-  default     = "us-central1"
+  default     = "asia-south1"
 }
 
 variable "zone" {
   description = "Zone in region where the zonal GKE cluster and node pool run."
   type        = string
-  default     = "us-central1-a"
+  default     = "asia-south1-a"
 
   validation {
     condition     = startswith(var.zone, "${var.region}-")
@@ -227,6 +227,23 @@ variable "patient_registry_db_password" {
 
 variable "patient_registry_db_password_version" {
   description = "Increment to rotate the write-only Patient Registry password."
+  type        = number
+  default     = 1
+}
+
+variable "patient_registry_migrator_db_password" {
+  description = "Write-only PostgreSQL password for the Patient Registry schema-migration login."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = length(var.patient_registry_migrator_db_password) >= 16
+    error_message = "patient_registry_migrator_db_password must be at least 16 characters."
+  }
+}
+
+variable "patient_registry_migrator_db_password_version" {
+  description = "Increment to rotate the write-only Patient Registry migration password."
   type        = number
   default     = 1
 }

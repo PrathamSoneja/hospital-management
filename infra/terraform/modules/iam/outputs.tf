@@ -11,3 +11,7 @@ output "kubernetes_service_account_gsas" {
     for service, account in google_service_account.workloads : service => account.email
   }
 }
+
+output "patient_registry_migration_gsa" {
+  value = google_service_account.patient_registry_migrator.email
+}

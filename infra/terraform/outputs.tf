@@ -33,6 +33,11 @@ output "patient_registry_database_username" {
   value       = module.cloudsql.patient_registry_username
 }
 
+output "patient_registry_migrator_database_username" {
+  description = "Schema migration database username for Patient Registry."
+  value       = module.cloudsql.patient_registry_migrator_username
+}
+
 output "allocation_app_database_username" {
   description = "Least-privilege runtime database username for Bed Allocation."
   value       = module.cloudsql.allocation_app_username
@@ -71,6 +76,31 @@ output "github_actions_service_account" {
 output "kubernetes_service_account_gsas" {
   description = "Google service account emails bound to Kubernetes service accounts."
   value       = module.iam.kubernetes_service_account_gsas
+}
+
+output "patient_registry_gsa" {
+  description = "GSA bound to the patient-registry-sa Kubernetes service account."
+  value       = module.iam.kubernetes_service_account_gsas["patient-registry"]
+}
+
+output "staff_scheduler_gsa" {
+  description = "GSA bound to the staff-scheduler-sa Kubernetes service account."
+  value       = module.iam.kubernetes_service_account_gsas["staff-scheduler"]
+}
+
+output "lock_coordinator_gsa" {
+  description = "GSA bound to the lock-coordinator-sa Kubernetes service account."
+  value       = module.iam.kubernetes_service_account_gsas["lock-coordinator"]
+}
+
+output "zookeeper_gsa" {
+  description = "GSA bound to the zookeeper-sa Kubernetes service account."
+  value       = module.iam.kubernetes_service_account_gsas["zookeeper"]
+}
+
+output "patient_registry_migration_gsa" {
+  description = "Google service account email for the Patient Registry migration Kubernetes service account."
+  value       = module.iam.patient_registry_migration_gsa
 }
 
 output "confluent_cluster_id" {
