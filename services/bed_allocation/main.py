@@ -70,6 +70,7 @@ def build_app(database_url: str = None, clients: dict | None = None, event_publi
         owner_id=os.environ.get("POD_NAME", "bed-alloc-instance-1"),
         lock_lease_ms=bounded_int("LOCK_LEASE_MS", 10000, 1000, 120000),
         lock_wait_timeout_ms=bounded_int("LOCK_WAIT_TIMEOUT_MS", 5000, 100, 60000),
+        recovery_claim_seconds=bounded_int("RECOVERY_CLAIM_SECONDS", 60, 5, 600),
     )
     set_service(domain_service)
 

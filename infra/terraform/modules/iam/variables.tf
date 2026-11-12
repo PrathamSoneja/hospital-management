@@ -38,3 +38,27 @@ variable "patient_documents_bucket" {
 variable "flink_bucket" {
   type = string
 }
+
+variable "allocation_database_secret_id" {
+  type = string
+}
+
+variable "allocation_migration_secret_id" {
+  type = string
+}
+
+variable "kafka_username_secret_id" {
+  type = string
+}
+
+variable "kafka_password_secret_id" {
+  type = string
+}
+
+variable "patient_registry_secret_id" {
+  type = string
+}
+
+variable "notification_topic_id" {
+  type = string
+}

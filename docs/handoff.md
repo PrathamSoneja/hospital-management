@@ -1,8 +1,15 @@
 # Project Handoff
 
-Updated: 2026-10-31
+Updated: 2026-11-06
 
-## Local Completion Milestone (2026-10-31, latest)
+## Current state (2026-11-06)
+
+`docs/precloud-status.md` is the current-state record for Allocation, Triage, load, observability, and
+pre-GCP readiness (branch `feature/precloud-sandbox`). Every section below is **historical** evidence;
+where it conflicts with that document (for example the dev-local load launchers, earlier test counts, or
+"latest" labels), the status document wins.
+
+## Local Completion Milestone (2026-10-31, historical)
 
 Supersedes every older statement below where they conflict. Branch `feature/outbox-delivery`, local only, not pushed.
 Commits after `6ea9f85`: `7c20453` nullable-ward notifications, `5d896cd` cloud-profile config validation,

@@ -151,3 +151,35 @@ resource "google_storage_bucket_iam_member" "workload_bucket_roles" {
   role   = each.value.role
   member = "serviceAccount:${google_service_account.workloads[each.value.service_name].email}"
 }
+
+resource "google_pubsub_topic_iam_member" "allocation_publisher" {
+  project = var.project_id
+  topic   = var.notification_topic_id
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:${google_service_account.workloads["bed-allocation"].email}"
+}
+
+locals {
+  allocation_secrets = {
+    allocation_database_url = var.allocation_database_secret_id
+    allocation_migration    = var.allocation_migration_secret_id
+    kafka_username          = var.kafka_username_secret_id
+    kafka_password          = var.kafka_password_secret_id
+  }
+}
+
+resource "google_secret_manager_secret_iam_member" "allocation_accessor" {
+  for_each = local.allocation_secrets
+
+  project   = var.project_id
+  secret_id = each.value
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.workloads["bed-allocation"].email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "patient_registry_accessor" {
+  project   = var.project_id
+  secret_id = var.patient_registry_secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.workloads["patient-registry"].email}"
+}

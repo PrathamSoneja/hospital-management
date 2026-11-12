@@ -208,6 +208,12 @@ variable "db_admin_password" {
   }
 }
 
+variable "db_admin_password_version" {
+  description = "Increment to rotate the write-only Cloud SQL administrator password."
+  type        = number
+  default     = 1
+}
+
 variable "patient_registry_db_password" {
   description = "Password for the least-privilege Patient Registry PostgreSQL login. Supply through TF_VAR_patient_registry_db_password or secret injection; never commit it."
   type        = string
@@ -217,6 +223,51 @@ variable "patient_registry_db_password" {
     condition     = length(var.patient_registry_db_password) >= 16
     error_message = "patient_registry_db_password must be at least 16 characters."
   }
+}
+
+variable "patient_registry_db_password_version" {
+  description = "Increment to rotate the write-only Patient Registry password."
+  type        = number
+  default     = 1
+}
+
+variable "allocation_app_db_password" {
+  description = "Write-only PostgreSQL password for the least-privilege Allocation runtime login."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = length(var.allocation_app_db_password) >= 16
+    error_message = "allocation_app_db_password must be at least 16 characters."
+  }
+}
+
+variable "allocation_app_db_password_version" {
+  description = "Increment to rotate the write-only Allocation runtime password."
+  type        = number
+  default     = 1
+}
+
+variable "allocation_migrator_db_password" {
+  description = "Write-only PostgreSQL password for the Allocation schema-migration login."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = length(var.allocation_migrator_db_password) >= 16
+    error_message = "allocation_migrator_db_password must be at least 16 characters."
+  }
+}
+
+variable "allocation_migrator_db_password_version" {
+  description = "Increment to rotate the write-only Allocation migration password."
+  type        = number
+  default     = 1
+}
+
+variable "notification_image" {
+  description = "Artifact Registry image for the Member C Notification Cloud Run service. Supply after that service image is built."
+  type        = string
 }
 
 variable "deletion_protection" {

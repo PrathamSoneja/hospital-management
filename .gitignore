@@ -89,3 +89,10 @@ tfplan.bin
 tfplan.txt
 /evidence/
 !docs/gcp-integration-runbook.md
+!docs/member_d_demo_runbook.md
+!docs/member_d_viva_qa.md
+!docs/precloud-status.md
+
+# Local sandbox runtime state, logs, and load evidence (tests/sandbox)
+/.sandbox/
+desktop.ini

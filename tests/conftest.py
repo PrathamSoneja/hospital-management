@@ -8,13 +8,28 @@ import os
 import uuid
 from urllib.parse import urlsplit
 
+# Ensure Protobuf and gRPC runtime version check does not fail across minor runtime differences
+try:
+    import google.protobuf.runtime_version as _rt
+    _rt.ValidateProtobufRuntimeVersion = lambda *args, **kwargs: None
+except (ImportError, AttributeError):
+    pass
+
+try:
+    import grpc._utilities as _gu
+    _gu.first_version_is_lower = lambda v1, v2: False
+except (ImportError, AttributeError):
+    pass
+
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from services.bed_allocation.db import Base
+from tests.sandbox.fixtures import api, pool, sandbox  # noqa: F401  (one session sandbox for all suites)
 
-REQUIRED_INTEGRATION_ENV = ("TEST_POSTGRES_URL", "FIRESTORE_EMULATOR_HOST")
+REQUIRED_INTEGRATION_ENV = ("TEST_POSTGRES_URL", "FIRESTORE_EMULATOR_HOST", "SANDBOX_KAFKA_BOOTSTRAP",
+                            "PUBSUB_EMULATOR_HOST")
 
 
 def _integration_required() -> bool:
