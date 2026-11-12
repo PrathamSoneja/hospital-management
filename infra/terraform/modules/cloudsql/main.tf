@@ -59,6 +59,14 @@ resource "google_sql_user" "patient_registry" {
   password_wo_version = var.patient_registry_password_version
 }
 
+resource "google_sql_user" "patient_registry_migrator" {
+  project             = var.project_id
+  name                = "patient_registry_migrator"
+  instance            = google_sql_database_instance.main.name
+  password_wo         = var.patient_registry_migrator_password
+  password_wo_version = var.patient_registry_migrator_password_version
+}
+
 resource "google_sql_user" "allocation_app" {
   project             = var.project_id
   name                = "allocation_app"

@@ -42,6 +42,16 @@ variable "patient_registry_password_version" {
   default = 1
 }
 
+variable "patient_registry_migrator_password" {
+  type      = string
+  sensitive = true
+}
+
+variable "patient_registry_migrator_password_version" {
+  type    = number
+  default = 1
+}
+
 variable "allocation_app_password" {
   type      = string
   sensitive = true

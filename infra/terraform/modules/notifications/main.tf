@@ -1,6 +1,6 @@
 resource "google_pubsub_topic" "notifications" {
   project = var.project_id
-  name    = "${var.name_prefix}-bed-notifications"
+  name    = "bed-notifications"
 }
 
 resource "google_pubsub_topic" "dead_letter" {
@@ -135,6 +135,15 @@ resource "google_secret_manager_secret" "kafka_allocation_password" {
 resource "google_secret_manager_secret" "patient_registry_database_url" {
   project   = var.project_id
   secret_id = "patient-registry-database-url"
+
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret" "patient_registry_migration_database_url" {
+  project   = var.project_id
+  secret_id = "patient-registry-migration-database-url"
 
   replication {
     auto {}

@@ -29,3 +29,7 @@ output "kafka_password_secret_id" {
 output "patient_registry_secret_id" {
   value = google_secret_manager_secret.patient_registry_database_url.secret_id
 }
+
+output "patient_registry_migration_secret_id" {
+  value = google_secret_manager_secret.patient_registry_migration_database_url.secret_id
+}
