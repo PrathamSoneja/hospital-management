@@ -7,8 +7,9 @@ Allocation's real adapters against teammates' merged service code, run locally w
   document storage its own tests inject; production needs a GCS bucket), driven by
   Allocation's HttpPatientRegistryClient.
 
-Bed Registry (Jay) and the Lock Coordinator (Nisarg) are not merged; they stay behind the
-tracked stand-ins, and their compatibility checks are pending.
+* Resource Analytics (Jay): its stream aggregator fed contract-valid Allocation events.
+
+Bed Registry and Lock Coordinator run as real processes in tests/integration/test_actual_services.py.
 """
 import os
 import threading
@@ -16,6 +17,10 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import json
+from pathlib import Path
+
+import jsonschema
 import pytest
 import uvicorn
 from sqlalchemy import create_engine
@@ -24,6 +29,8 @@ from sqlalchemy.pool import StaticPool
 from services.bed_allocation.clients.grpc_clients import GrpcStaffSchedulerClient, HttpPatientRegistryClient
 from services.patient_registry.main import create_app
 from services.patient_registry.models import Base as PatientBase
+from services.resource_analytics.aggregator import StreamAggregatorEngine
+from services.resource_analytics.models import BedEvent
 from services.staff_scheduler.grpc_server import create_grpc_server
 from services.staff_scheduler.models import ShiftCreate, StaffCreate
 from services.staff_scheduler.repository.firestore import FirestoreStaffRepository
@@ -119,3 +126,23 @@ def test_patient_registry_boundary_with_allocation_adapter(patient_base_url):
     found = client.get_admission(admission["admission_id"], "req-boundary")
     assert (found.admission_id, found.patient_id, found.status) == (admission["admission_id"], patient["patient_id"], "OPEN")
     assert client.get_admission("adm-does-not-exist", "req-boundary") is None  # 404 -> not found, not an outage
+
+
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
+    "Resource Analytics defect (Jay): StreamAggregatorEngine.process_event and flink_job.sql do not "
+    "deduplicate by event_id, but Allocation's outbox delivers at least once, so a redelivered event is "
+    "counted twice (allocated and occupancy)."))
+def test_resource_analytics_counts_a_redelivered_allocation_event_once():
+    event = {  # the shape Allocation's outbox publishes to Kafka (validated against the contract below)
+        "schema_version": "1.0.0", "event_id": "evt-1", "stream_sequence": 1, "event_type": "BED_ALLOCATED",
+        "event_time": "2026-11-12T10:00:01+00:00", "request_id": "req-1", "allocation_id": "alloc-1",
+        "admission_id": "adm-x", "patient_id": "pat-x", "pool_id": POOL, "bed_id": "bed-1", "lock_wait_ms": 3,
+        "lock_contended": False, "allocation_wait_ms": 40, "occupancy_delta": 1,
+    }
+    schema = json.loads((Path(__file__).resolve().parents[1] / "contracts/events/bed-event.schema.json").read_text())
+    jsonschema.validate(event, schema)
+    engine = StreamAggregatorEngine()
+    engine.process_event(BedEvent(**event))
+    engine.process_event(BedEvent(**event))  # broker redelivery: same event_id and stream_sequence
+    stats = engine.flush_all_windows()
+    assert [(s.allocated, s.occupancy_at_window_end) for s in stats] == [(1, 1)]
