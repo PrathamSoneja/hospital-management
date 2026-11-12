@@ -7,7 +7,9 @@ from pathlib import Path
 from jsonschema import Draft202012Validator
 
 SCHEMA_PATH = Path(__file__).resolve().parents[2] / "contracts" / "events" / "notification.schema.json"
-VALIDATOR = Draft202012Validator(json.loads(SCHEMA_PATH.read_text(encoding="utf-8")))
+SCHEMA = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+VALIDATOR = Draft202012Validator(SCHEMA)
+EVENT_TYPES = set(SCHEMA["properties"]["event_type"]["enum"])
 
 
 class BadMessage(Exception):

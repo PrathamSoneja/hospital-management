@@ -6,6 +6,7 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
+from prometheus_client import REGISTRY
 
 from services.notification.main import build_app
 from services.notification.store import FirestoreNotificationStore
@@ -168,3 +169,26 @@ def test_firestore_trouble_asks_pubsub_to_retry():
 def test_health_endpoints_respond(client):
     assert client.get("/healthz").status_code == 200
     assert client.get("/readyz").status_code == 200
+
+def metric(name, **labels):
+    """Read one metric's current value, or 0 if it hasn't been recorded yet."""
+    return REGISTRY.get_sample_value(name, {"service": "notification-service", **labels}) or 0
+
+
+def test_metrics_count_each_outcome(client):
+    before = {outcome: metric("notifications_total", event_type="BED_ALLOCATED", outcome=outcome)
+              for outcome in ("delivered", "duplicate")}
+    rejected = metric("notifications_total", event_type="unknown", outcome="rejected")
+    missing = metric("notification_missing_messages_total", pool_id="WARDB-ISO")
+    event = make_event(pool_id="WARDB-ISO", stream_sequence=1)
+
+    client.post("/", json=push(event))
+    client.post("/", json=push(event))
+    client.post("/", json=push(make_event(pool_id="WARDB-ISO", stream_sequence=5)))
+    client.post("/", json=push(make_event(event_type="BED_TELEPORTED")))
+
+    assert metric("notifications_total", event_type="BED_ALLOCATED", outcome="delivered") == before["delivered"] + 2
+    assert metric("notifications_total", event_type="BED_ALLOCATED", outcome="duplicate") == before["duplicate"] + 1
+    assert metric("notifications_total", event_type="unknown", outcome="rejected") == rejected + 1
+    assert metric("notification_missing_messages_total", pool_id="WARDB-ISO") == missing + 3
+    assert "notifications_total" in client.get("/metrics").text
