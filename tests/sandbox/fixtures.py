@@ -100,9 +100,11 @@ def pool(request, sandbox):
 
 
 def seed_pool(sandbox, pool_id, beds, admissions, staff=100, levels=None):
-    """admissions: list of admission IDs; levels: optional urgency per admission (default 3)."""
+    """admissions: list of admission IDs; levels: optional urgency per admission (default 3).
+
+    Returns {fixture admission ID: actual admission ID} (they differ only with the real Patient Registry)."""
     levels = levels or {}
-    sandbox.seed({
+    return sandbox.seed({
         "beds": [{"bed_id": f"{pool_id}-bed-{n:02d}", "pool_id": pool_id, "ward": f"WARD-{pool_id}"}
                  for n in range(1, beds + 1)],
         "staff_capacity": {pool_id: staff},

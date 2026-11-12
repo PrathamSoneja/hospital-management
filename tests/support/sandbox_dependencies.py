@@ -26,7 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import grpc
 
-from shared.generated import bed_pb2, bed_pb2_grpc, lock_pb2_grpc, staff_pb2, staff_pb2_grpc
+from shared.generated import bed_pb2, bed_pb2_grpc, lock_pb2, lock_pb2_grpc, staff_pb2, staff_pb2_grpc
 from tests.support.stateful_lock import StatefulLockCoordinator, StatefulLockServicer
 
 FAULT_MODES = {"unavailable", "lost_ack", "delay"}  # fail before apply; apply then fail; sleep then apply
@@ -36,6 +36,7 @@ class SharedState:
     def __init__(self):
         self.lock = threading.RLock()
         self.coordinator = StatefulLockCoordinator()
+        self.validate = self.coordinator.validate  # replaced by the real Coordinator's Validate (--lock-addr)
         self.reset()
 
     def reset(self):
@@ -86,7 +87,7 @@ class SharedState:
 
 
 def _fenced(state: SharedState, context) -> bool:
-    valid, _ = state.coordinator.validate(context.lock_id, context.owner_id, context.pool_id, context.fencing_token)
+    valid, _ = state.validate(context.lock_id, context.owner_id, context.pool_id, context.fencing_token)
     if not valid:
         state.fence_rejections += 1
     return valid
@@ -247,8 +248,16 @@ def _http_handler(state: SharedState):
     return Handler
 
 
-def serve(grpc_port: int, http_port: int, host: str = "127.0.0.1"):
+def serve(grpc_port: int, http_port: int, host: str = "127.0.0.1", lock_addr: str | None = None):
     state = SharedState()
+    if lock_addr:  # leases come from the real Lock Coordinator; fence stand-in mutations against it
+        coordinator = lock_pb2_grpc.LockCoordinatorStub(grpc.insecure_channel(lock_addr))
+
+        def validate(lock_id, owner_id, pool_id, fencing_token):
+            response = coordinator.Validate(lock_pb2.ValidateLockRequest(
+                lock_id=lock_id, owner_id=owner_id, pool_id=pool_id, fencing_token=fencing_token), timeout=3)
+            return response.valid, response.reason
+        state.validate = validate
     # Acquire blocks a worker while waiting for the pool lease; size the pool so waiters cannot
     # starve the lease holder's Bed/Staff calls (a test-double artefact, not a production setting).
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=256))
@@ -271,5 +280,6 @@ if __name__ == "__main__":
     parser.add_argument("--grpc-port", type=int, required=True)
     parser.add_argument("--http-port", type=int, required=True)
     parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--lock-addr", help="validate fencing against this real Lock Coordinator")
     args = parser.parse_args()
-    serve(args.grpc_port, args.http_port, args.host)
+    serve(args.grpc_port, args.http_port, args.host, args.lock_addr)
