@@ -1,161 +1,87 @@
 # Pre-GCP Status: Allocation, Triage, Load, Observability (Pratham)
 
-Updated 2026-11-11. Branch `feature/precloud-renewal` from merged `master` (`4c12fd2`). The branch was pushed at `2aac6a0`
-(PR open). The CI fix `1a9ed1d` and this documentation are local and **not pushed**. Rows are at `ba2461d` unless marked
-`1a9ed1d` (see "Revision"). Results from 2026-11-06 are kept
-below as labelled history. `docs/handoff.md` sections dated before 2026-11-06 are historical.
+Updated 2026-11-12. **Combined tree tested:** `a6403bb` on local branch `integration/precloud-combined`, plus this
+documentation commit. That tree is `origin/master` `1739e57` (PRs #6 Bed Registry, #9 Lock Coordinator, #10
+Notification, #11 Coordinator hardening) merged with `feature/precloud-renewal` `285703b` (open PR #8) and the
+local commits listed under "What changed". The branch is in the worktree `..\hm-combined`; nothing is pushed or
+merged remotely. Evidence `C` = `..\hm-combined\.sandbox\` (ignored). The 2026-11-11 and 2026-11-06 results are
+in Git history (`285703b:docs/precloud-status.md`) and are superseded.
 
-**Status:** the Pratham-owned pre-GCP work is implemented and locally verified, with these exceptions:
-- **Contention latency:** the 50-way contention scenario misses its local 8 s latency bound on this machine today. Correctness holds, and the identical 2026-11-06 code shows the same latency, so the cause is environmental.
-- **GitHub CI:** a run has **not been observed** (no `gh`, and the private repository's API returns 403 from here).
-- **Not covered here:** anything needing GCP or teammate services is listed under External blockers. Nothing here is GKE, HPA, ZooKeeper, or cloud evidence.
+**Status.** Local readiness is **not complete**: the sustained load procedure did not settle within its window in 2 of 4 runs. The required local suite passes on the combined tree. Allocation and Triage have been run against the
+real Lock Coordinator (ZooKeeper), Bed Registry and Patient Registry. Exceptions:
+- **Staff Scheduler (Ruchir):** BLOCKED on the Firestore defect; the proposed patch is verified (strict xfail).
+- **Resource Analytics (Jay):** it counts redelivered events twice (strict xfail).
+- **Local contention latency:** above the 8 s bound in 3 of 4 runs. Correctness holds every time.
+- **Not run here:** anything on GKE, Cloud Logging, or cloud brokers.
 
-## What changed (and why)
+**GitHub CI (observed through the public API):**
+- PR #8 at `285703b`: `checks` success.
+- `master` `1739e57`: `checks` **failure** at step 14 "Load procedure" (tests passed before it; images step skipped). The cause is not visible without authenticated logs/artifacts. `22e1060` was success.
+- The combined tree has not been pushed, so no CI run covers it.
 
-| Area | Change |
+## What changed (local commits on the combined tree)
+
+| Commit | Change and reason |
 |---|---|
-| Sandbox | Tracked, test-only `tests/sandbox/` + `tests/support/sandbox_dependencies.py`. One shared, stateful process serves the Lock Coordinator, Bed Registry, and Staff Scheduler over their real gRPC contracts, plus the Patient Registry over HTTP. Its mutations are idempotent by `operation_id`, fenced by the current lease, and fault-injectable (`unavailable`, `lost_ack`, `delay`). Allocation (2 processes) and Triage run through their **production entrypoints**, configured only by environment variables. There is no adapter injection and no fake fallback. Infrastructure is the isolated Compose project `hospital-sandbox` (`tests/sandbox/compose.yaml`): PostgreSQL, the Firestore and Pub/Sub emulators, single-node KRaft Kafka, Prometheus, and Grafana. It uses tmpfs storage and ports 43000–49092. |
-| Safety rails | Only `*_test` databases on localhost can be created or dropped. Only processes the sandbox started are stopped. Child processes get no `GOOGLE_APPLICATION_CREDENTIALS`, an empty gcloud config, and an unreachable metadata server, and this is tested. `infra-down` removes only the `hospital-sandbox` project. |
-| Allocation fixes (found by sandbox load) | (1) A release no longer promotes a queue head whose own create is unresolved (enqueue committed, ACK lost); the durable `PROMOTE` is kept and retried. (2) Promotion completion is a guarded transition: WAITLISTED → ALLOCATED, and only while the release still owns `PROMOTE`. Recovery skips rows whose claim lapsed during a long batch. Before this, a stale runner could resurrect a released candidate, leaving one bed with two owners. (3) Create finalization never overwrites an already-settled row. (4) A pool-lock timeout during recovery used to reset the workflow to `CHECK_PRIORITY`, forgetting a committed enqueue whose ACK was lost. The retry then allocated a bed and orphaned the waitlist entry, which later blocked every promotion in the pool. The action in progress is now kept, and promotion removes a head entry whose allocation has moved past waitlisting (using a stable operation ID). All regression tests fail on the previous code (`tests/test_allocation_workflow_claims.py`). |
-| Configuration | `RECOVERY_CLAIM_SECONDS` (5–600, default 60) replaces the fixed 60 s workflow and recovery claim. It must exceed the longest workflow step. It is added to `.env.gcp.example` and the staging overlay. No API, event, or schema contract changed. |
-| Tests | Cross-process workflows, event delivery to real local brokers, dependency contract acceptance (sandbox or real endpoints), migrations, release gate, rendered-manifest consistency, sandbox isolation, and promtool alert unit tests (`monitoring/rules/alerts.test.yml`). |
-| Load | `k6/contention.js` and `k6/sustained-multi-pool.js` now spread load across allocators. The sustained run discharges existing occupants, so waitlists and promotions happen under load. It retries 503/504 with the same Idempotency-Key, and its latency bound is an explicit parameter (staging default 3 s; local run 8 s). |
-| Release readiness | `scripts/check_release_config.py` is the pre-sync gate. It rejects `PLACEHOLDER_*`, non-digest or all-zero images, `:latest`, and bad namespaces. The templates stay schema-valid with their placeholders. `scripts/smoke_image.py` checks health, readiness, and graceful SIGTERM shutdown for both images. |
-| Terraform lock files (2026-11-11) | The lock files held only `windows_amd64` checksums, so `init -lockfile=readonly` + `validate` failed on Linux (reproduced in `hashicorp/terraform:1.15.8`). `linux_amd64` hashes were added for the same versions (google 6.50.0, confluent 2.93.0); nothing else in Ruchir's Terraform changed. |
-| Migrations and roles (2026-11-11) | Head is `20261031_04`, which grants DML to `allocation_app`. Local bootstrap now creates `allocation_migrator`/`allocation_app` the way the runbook prepares Cloud SQL: migrations run as the migrator, and the sandbox services, audits, and image smoke run as `allocation_app`. Tests cover the 04 head, 04 -> 02 -> head, DML allowed, DDL refused (`42501`), default privileges on future migrator tables, and DML revoked after rollback. |
-| Lease renewal (2026-11-11) | `renew()` on the lock client uses the existing `Renew` RPC with the client's bounded deadline. `LeaseRenewer` runs one thread per held lease and renews three times per lease period. Its deadline is measured on the monotonic clock from before each request. It is stopped before release, and holders sharing a `lock_id` share it (the last holder releases). Every mutation context passes an ownership check. After a refused renewal or actual expiry, no new mutation is sent and the workflow goes RECOVERING with stable operation IDs. Renewal does not cancel in-flight calls or fix the Firestore lease-validation race. Verified only against the tracked Coordinator double; **real Coordinator pending (Nisarg)**. |
-| Demo controls (2026-11-11) | `POST /api/v1/allocations?pause_ms=0..30000&lock=false` is accepted only with `ALLOCATION_DEMO_MODE=true`; otherwise it returns 400 `DEMO_CONTROLS_DISABLED`. Demo mode is refused in production, and `LOCK_RENEWAL_ENABLED=false` is refused outside demo mode. `lock=false` skips only the pool lease: fenced Bed/Staff/Triage still refuse its mutations, and recovery completes later under a real lease. Expiry-demo profile: 5 s lease, renewal off (`up --profile expiry-demo`). Staging keeps its 10 s lease with renewal. |
-| Service boundaries (2026-11-11) | `tests/test_service_boundaries.py` drives Ruchir's merged Staff Scheduler (gRPC + Firestore emulator) and Patient Registry (HTTP) with Allocation's real adapters. The Patient boundary passes. The Staff boundary exposed a defect (see blockers): it is a strict xfail, with a verified one-line fix in `docs/proposed-fixes/`. |
-| CI | Pins Terraform 1.15.8 and kubectl v1.36.1 and validates Terraform offline. It renders and validates manifests with kubeconform and asserts the release gate rejects the templates. It runs promtool rule tests, then the **same sandbox CLI** as local runs (`verify`, `load`), builds and smoke-tests the images, and uploads JUnit, evidence, and rendered manifests. `REQUIRE_INTEGRATION=1` now also requires Kafka and the Pub/Sub emulator. |
+| `69fdec6` | Merged master (#6, #9). Kept Jay's active-admission replay and the fresh-session same-key recheck. Restored `-lockfile=readonly` (the lock files carry linux hashes). **Reverted:** migration 04's role-existence guard (it silently skipped grants) and the no-op metrics stub used when `prometheus_client` is missing (a silent production fallback). |
+| `09cc309` | **Allocation race (found with the real services):** a worker read its next action before waiting for the pool lease. If its claim lapsed, a peer settled the row, and the stale worker then left it WAITLISTED with a reserved bed and staff. Fix: re-read the row under the lease and stop if it has settled. A deterministic regression test fails before the fix. |
+| `21bce82`, `986b315` | Sandbox `actual=` mode runs the merged Lock Coordinator (local ZooKeeper), Bed Registry, Patient Registry and optionally Staff, seeded only through their APIs. The stand-in fences against the real Coordinator (`--lock-addr`). Audits read ownership from the real Bed Registry. `cli load`/`up` now use the real Lock and Bed. |
+| `dffe2fe` | `BED_SERVICE_ADDR` pointed at port 50051; the Bed Registry Service and container use **50053**. |
+| `6ba0b5b`, `132219a` | Structured logs: settled and recovering allocations, and 4xx/5xx responses with `request_id` and the route template (previously Allocation logged nothing per request, so the Cloud Logging 404 check could not succeed). Triage gRPC INTERNAL errors are now logged. Exhausted Firestore transaction contention (`ValueError` from `Aborted`) is a retryable 503, not INTERNAL. |
+| `986b315` | Dashboard: Coordinator acquire outcomes and lease expiry, memory, Kubernetes health. Sandbox Prometheus scrapes the real Coordinator, Bed Registry and ZooKeeper (metrics on port 7000). |
+| `95872e8` | Staging overlay includes the managed-Prometheus PodMonitoring (Terraform enables managed collection); ingress on 8000 admits `gmp-system`. Without this, no Allocation/Triage metrics would be collected on GKE. |
+| `c0fc759` | The release gate also checks `k8s/lock-coordinator/overlays/staging`, which ArgoCD syncs (its placeholders were unchecked). |
+| `5a69eea` | k6 `ADMISSIONS_FILE` plus `scripts/seed_load_fixture.py`: the real Patient Registry assigns admission IDs, so the k6 fixed-prefix IDs would 404 in staging. |
+| `ae1609a`, `a6403bb` | Boundary/regression tests. Allocation against the real Coordinator: Release contract, lost Release ACK, Release=false on a reaped lease. #11's fixes are now regressions. Release racing Renew across replicas is covered. |
+| `a5aac60` | Removed superseded scaffolding (below). |
 
-## Commands (PowerShell, repository root)
+## Verification on the combined tree
+
+| Check | Result | Evidence | Status |
+|---|---|---|---|
+| Full suite, `REQUIRE_INTEGRATION=1` (Postgres, Firestore, Pub/Sub, Kafka, ZooKeeper) | **241 passed, 2 xfailed, 0 failed.** The two strict xfails are the Staff Scheduler defect and the Analytics duplicate counting | `C\combined-final\junit.xml`, `full.log` | VERIFIED |
+| Real services: `tests/integration/test_actual_services.py` (Lock+ZK, Bed, Patient real; Staff stand-in) | 12 passed in each of 3 targeted runs on the final tree and in the full suite; a 4th targeted run failed in sandbox setup (`alembic upgrade`, not reproduced, cause unknown). 9 passed / 2 xfailed ×3 before #11. Covers admission → triage → allocation, 404 admission, exhaustion/waitlist, urgency reorder, release → promotion, cancel, same-key retries vs mismatch/different key, 50 admissions/10 beds over 2 allocators, renewal of a 13 s operation past the 10 s lease, Coordinator crash/restart mid-lease, 5 s non-renewing expiry, `lock=false`, allocator crash recovery, stale tokens at Bed and Triage, same-acquire-ID across 2 Coordinator replicas, waiting Acquire + retry, Release racing Renew | `C\pytest-actual\` | VERIFIED (local) |
+| Same with real Staff + proposed Staff patch (temporarily applied, reverted) | 8 passed / 2 xfailed (pre-#11); all four real services | `C\combined-evidence\actual-staff-patched.xml` | VERIFIED with patch |
+| `tests/acceptance` in real-endpoint mode against local real services | 3/4; the Staff mutation fails INTERNAL (the defect). 4/4 with the patch | `C\combined-evidence\acceptance-real*.xml` | BLOCKED (Staff) |
+| Release contract against the real Coordinator (`tests/test_allocation_real_coordinator.py`) | owner True; same-owner retry True (tombstone); wrong owner False; reaped lease False; released lease not renewable or valid. Lost Release ACK → RECOVERING → one recovery under a **fresh** lease (new lock_id, higher token) with **no repeated bed/staff mutation**. Release=false on a reaped lease → outcome kept, not undone, one recovery, then nothing to recover | same | VERIFIED |
+| Concurrent same-acquire-ID / lease-start race (Nisarg) | Before #11: duplicates waited until DEADLINE_EXCEEDED, and a concurrent start_lease returned UNKNOWN (30/30). After #11: both pass | `test_actual_services.py` | FIXED by #11 |
+| Seed script + k6 `ADMISSIONS_FILE` with all real services (Staff patched temporarily) | k6 checks 100%; 10 ALLOCATED / 40 WAITLISTED / 10 distinct beds; real Bed Registry ownership = ALLOCATED rows | `C\combined-final\k6-real-ids\` | VERIFIED (local) |
+| Load: contention, `cli load` (real Lock + Bed; Patient/Staff stand-ins), 4 runs | **10 ALLOCATED / 40 WAITLISTED / 10 distinct beds, 0 violations, real Bed Registry ownership = rows, in every run.** p95 7.1 / 16.9 / 16.6 / 13.9 s against an 8 s bound (k6 exit 99 in 3 runs) | `C\evidence6111*T1*Z\` | correctness VERIFIED; latency FAILED (environment) |
+| Load: sustained multi-pool, same 4 runs | k6 checks 99.85 / 99.8 / 99.88 / 99.09%. Audit after the 180 s settle window: runs 2 and 3 clean (0 unsettled, streams gap-free); runs 1 and 4 **not settled** (59 and 162 rows RECOVERING/PROCESSING, bed ownership mid-recovery). Run 1 settled about 3 min later with ownership matching. Final tree (`a6403bb`, run 4 = `C\evidence61112T131132Z`): restarting allocators on the same data and Firestore project drained 162 → 27. The rest need stand-in Staff state, which is lost when that in-memory process restarts, so it could not be completed cleanly. Causes: pool-lock wait timeouts and Triage Enqueue failures under Firestore-emulator lock contention | `audit-sustained.json`, `audit-after-resume2.json` | **FAILED (not settled within 180 s)**; no duplicate ownership found |
+| Notification (#10) | Its tests pass in the suite. All 691 real Allocation Pub/Sub events from a load run validate and render (286 with `ward: null`) | - | VERIFIED (local); Eventarc/Cloud Run **NOT RUN** |
+| Migrations / runtime role | 04 head, 02 ↔ head, DML ok, DDL refused, revoke on rollback (in suite, strict migration restored) | junit | VERIFIED |
+| Static at `a6403bb`: compile (146 files), OpenAPI ×4, proto drift, Compose ×2, Terraform fmt/init `-lockfile=readonly`/validate ×2, kubeconform (25 valid, 4 CRDs skipped; staging + migrate + lock-coordinator), release gate exit 1 on templates (3 paths), promtool SUCCESS | all as expected | `C\combined-final\static-checks.txt` | VERIFIED |
+| Images at `a6403bb` | Allocation as `allocation_app`: healthz/readyz 200, missing 404, SIGTERM exit 0 (0.8 s). Triage: healthz 200, readyz 503 without a Coordinator, exit 0 | `C\combined-final\image-smoke.txt` | VERIFIED |
+
+**Local latency is not a performance result.** Contention p95 values: 7.1 s, 16.9 s, 16.6 s, 18.8 s (bound 8 s). The run-to-run swing on the same code shows it is machine load. The bound was not relaxed. Correctness held in every run.
+
+**Root cause of slow settling (first two load runs):** after k6 stopped, 218 rows sat unsettled for about 100 s. Triage Enqueue/RemoveEntry returned INTERNAL (52 in one run): the Firestore emulator answered `Aborted: Transaction lock timeout` and `firestore.transactional` gave up after 5 attempts. Rows recovered once the locks cleared. Mapping and logging are fixed (above); the contention itself remains. Every Triage mutation writes the per-pool fence document and runs a query inside its transaction, which can hot-spot on real Firestore too. Staging load must watch Triage gRPC errors. No design change is made here.
+
+## Scaffolding removed / retained
+
+- **Removed:** `scripts/local/Start-LocalStack.ps1`, `Stop-LocalStack.ps1`, `Invoke-LocalTests.ps1` (could no longer satisfy `REQUIRE_INTEGRATION`), `Invoke-LocalLoad.ps1`, the `.env.local` helpers in `LocalCommon.ps1`, and `docs/proposed-fixes/lock-coordinator-start-lease.patch` (superseded by #11). None was referenced elsewhere.
+- **Retained:** `tests/support/sandbox_dependencies.py` and `stateful_lock.py`, for fault injection (lost ACK, unavailability, delay) and for the load fixtures' Patient/Staff. Also kept: the in-process fakes, `triage_coordinator_server.py`, the Firestore/Postgres emulator tests, and `tests/support/patient_registry_local.py` (the real Patient app with in-memory documents). Production imports nothing from `tests/`.
+
+## Commands
 
 ```powershell
-py -3.11 -m venv .venv; .\.venv\Scripts\python.exe -m pip install -r requirements.txt openapi-spec-validator
-.\scripts\local\Sandbox.ps1 infra-up          # start/wait: Postgres, Firestore, Pub/Sub, Kafka, Prometheus, Grafana
-.\scripts\local\Sandbox.ps1 verify            # full pytest suite (JUnit -> .sandbox\pytest\); any skip fails
-.\scripts\local\Sandbox.ps1 load -Duration 2m # reset DB + Firestore project -> seed -> readiness -> k6 -> audit -> evidence
-.\scripts\local\Sandbox.ps1 up                # interactive sandbox (fixed ports below) until Ctrl+C
-.\.venv\Scripts\python.exe -m tests.sandbox.cli up --profile expiry-demo   # 5 s lease, no renewal, demo controls on
-.\scripts\local\Sandbox.ps1 infra-down        # remove only the hospital-sandbox Compose project
+.\scripts\local\Sandbox.ps1 infra-up          # Postgres, Firestore, Pub/Sub, Kafka, ZooKeeper, Prometheus, Grafana
+.\scripts\local\Sandbox.ps1 verify            # full suite; any skip fails
+.\scripts\local\Sandbox.ps1 load -Duration 2m # real Lock + Bed; seed -> k6 -> audit -> evidence
+.\scripts\local\Sandbox.ps1 up                # interactive (real Lock + Bed) until Ctrl+C
+.\.venv\Scripts\python.exe -m pytest tests\integration\test_actual_services.py tests\test_allocation_real_coordinator.py -q
+$env:SANDBOX_ACTUAL_STAFF='1'                 # adds the real Staff Scheduler (needs Ruchir's fix)
 ```
 
-The same commands run on Linux/CI as `python -m tests.sandbox.cli <command>`. Fixed interactive ports:
+Fixed ports: Allocation 47201/47202, Triage 47101/47151, stand-ins 47051/47080, Lock 47351 (gRPC)/47301,
+Bed 47451 (gRPC)/47401, Prometheus 49090, Grafana 43000.
 
-| Service | Port |
+## Pending actions
+
+| Owner | Action |
 |---|---|
-| Allocation REST | 47201, 47202 |
-| Triage REST / gRPC | 47101 / 47151 |
-| Shared stand-ins (gRPC / HTTP) | 47051 / 47080 (`/admin/state`) |
-| Prometheus | 49090 |
-| Grafana | 43000 (user `admin`, password `sandbox-only`) |
-
-Other checks:
-
-```powershell
-.\.venv\Scripts\python.exe scripts\check_release_config.py        # exits 1 until every placeholder/digest is resolved
-docker run --rm --entrypoint promtool -v "${PWD}\monitoring\rules:/r:ro" prom/prometheus:v2.50.0 test rules /r/alerts.test.yml
-.\.venv\Scripts\python.exe scripts\smoke_image.py hospital-bed-allocation:<tag> --database-url <local *_test URL at head>
-.\.venv\Scripts\python.exe scripts\smoke_image.py hospital-triage:<tag> --service triage --firestore localhost:48080 --port 18003
-```
-
-## Verification matrix (current, 2026-11-11 at `ba2461d`)
-
-Main working tree (Ruchir's uncommitted `outputs.tf` edit present but untouched). `F` = `.sandbox\final-ba2461d\`.
-
-| Check | Command | Result | Evidence | Status |
-|---|---|---|---|---|
-| Full suite, integration required (`1a9ed1d`) | `python -m tests.sandbox.cli verify` (`REQUIRE_INTEGRATION=1`) | **168 passed, 1 xfailed, 0 failed**. The xfail is `tests/test_service_boundaries.py::test_staff_scheduler_boundary_with_allocation_adapter` (strict; the documented Staff Scheduler defect, unchanged). 0 unhandled-thread warnings; the remaining warnings are third-party or pre-existing (Google Python 3.11 notices, Starlette `httpx` deprecation, Firestore positional filter) | `.sandbox\final-1a9ed1d\junit.xml`, `full.log` | VERIFIED |
-| Same-key create race (PR CI failure, `1a9ed1d`) | `tests/test_allocation_workflow_claims.py::test_matching_retry_committed_between_idempotency_and_active_checks_replays`; cross-process test repeated | The deterministic test forces a matching commit between the idempotency and active-admission checks; it failed (`ACTIVE_ALLOCATION_EXISTS`) before the fix and passes after. Mismatch and different-key refusals still hold. `test_idempotent_replay_conflict_and_concurrent_retries` passed **10/10** after the fix (6/6 locally before it; the race was timing-dependent) | same | VERIFIED |
-| Migrations and runtime privileges | `tests/test_migrations_postgres.py` | 3 passed: empty -> `04` without drift; 02 -> `04` with legacy rows; `04` -> 02 -> `04`; `allocation_app` DML ok, DDL refused, default privileges, revoke on rollback | same | VERIFIED |
-| Lease renewal | `tests/test_lease_renewal.py` | 8 passed: renew beyond expiry; refusal; unreachable until actual expiry; renewal disabled; gRPC `Renew`; workflow longer than the lease; lost lease -> no mutation, then recovery with the stable operation ID; shared lease. A mutation test (guard removed) fails | same | VERIFIED (Coordinator double) |
-| Demo controls | `tests/integration/test_sandbox_demo_controls.py`, `tests/test_runtime_config.py` | rejected outside demo mode (400) and in production (startup); `lock=false` refused by fenced stand-ins then recovered; paused non-renewing holder loses its 5 s lease while another holder proceeds; invariants hold | same | VERIFIED |
-| Patient Registry boundary | `tests/test_service_boundaries.py` | Allocation's HTTP adapter against Ruchir's app: OPEN admission, 404 -> not found | same | VERIFIED (GCS replaced by his test storage) |
-| Staff Scheduler boundary | same | **Defect.** `AssignStaff` fails INTERNAL on Firestore (`transaction.get(CollectionReference)`). With the proposed one-line fix: boundary + his 5 tests pass | `docs/proposed-fixes/staff-scheduler-transaction-get.patch` | FAILED (teammate code; strict xfail) |
-| Python sources | compile all tracked `.py` | 109 files, 0 errors | - | VERIFIED |
-| Terraform | `fmt -check`; `init -backend=false -lockfile=readonly`; `validate`, both roots | Linux container and Windows: all pass after the lock-file fix (Linux failed before) | - | VERIFIED (no plan, state, or apply) |
-| OpenAPI / protobuf / Compose | `openapi_spec_validator` x4; `compile_proto.py` + `git diff`; `docker compose config` x2 | all OK; no diff | - | VERIFIED |
-| Manifests / release gate | kubeconform (K8s 1.30 strict); `check_release_config.py` | 16 valid, 2 CRDs skipped; gate exits 1 on templates (expected) | - | VERIFIED |
-| Alert rules | `promtool check rules`; `promtool test rules` | 3 rules; SUCCESS | - | VERIFIED |
-| Images | `docker build` x4; `smoke_image.py` | Allocation as `allocation_app`: healthz 200, readyz 200, 404, SIGTERM exit 0 (0.7 s). Triage: healthz 200, readyz 503 without Coordinator, exit 0 | tags `:ba2461d` | VERIFIED |
-| Load: contention (correctness) | `python -m tests.sandbox.cli load --duration 2m` | 50 admissions, 10 beds, 2 allocators -> **10 ALLOCATED / 40 WAITLISTED / 10 distinct beds**, 0 violations | `F\load-evidence\audit-contention.json` | VERIFIED (MOCK dependencies) |
-| Load: contention (latency) | same | p95 **12.6 s > 8 s bound** (k6 exit 99). k6 shows the time is server-side waiting (connect ~40 ms) and serialized under the pool lock. The 2026-11-06 code `2032c31` gives p95 12.8 s on this machine today (it was 4.9 s on 2026-11-06), so the cause is the environment, not today's changes. Bound not relaxed | `F\latency-investigation-20261111\` | FAILED (environment) |
-| Load: sustained multi-pool | same | 2,877 requests, checks 99.87% (3 Triage PUT 504 after retries), p95 5.0 s; audit: 30 ALLOCATED / 246 WAITLISTED / 275 RELEASED, 0 unsettled, 6 outbox streams gap-free and drained | `F\load-evidence\` | VERIFIED (MOCK dependencies) |
-| Observability | same (`observability.json`) | 3/3 targets up; Grafana healthy; Grafana -> Prometheus proxy returns data; endpoint labels are route templates; 4,550 JSON log lines carry k6 request IDs | `F\load-evidence\observability.json` | VERIFIED (local) |
-| GitHub Actions CI | `.github/workflows/ci.yml` | **Not observed directly** (no `gh`; API 403). User-reported PR run at `2aac6a0`: 1 failed (the same-key race above), 166 passed, 1 xfailed. The fix `1a9ed1d` is not pushed, so no CI run has covered it | - | NOT OBSERVED |
-| Lock Coordinator / Bed Registry (Nisarg / Jay) | - | Branches `feature/lock-coordinator` and `feature/bed-registry-and-analytics` are **not merged**; compatibility not run | - | PENDING |
-| GKE, HPA, Cloud Logging, real brokers | - | - | - | EXTERNAL BLOCKER |
-
-### Historical: 2026-11-06 at `2032c31` (superseded where rows overlap)
-
-Evidence lives under the ignored `.sandbox\` directory on the machine that ran it. The load directories contain `manifest.json` (revision, dirty flag, commands, fixtures, limitations), k6 logs and summaries, audits, `observability.json`, and process logs.
-
-All rows are local results at `2032c31` from a **fresh clone with a new virtualenv**, unless marked otherwise.
-`R` = `.sandbox\rehearsal-2032c31\` (copied from the clone).
-
-| Check | Command | Result | Evidence | Status |
-|---|---|---|---|---|
-| Full suite, integration required | `Sandbox.ps1 verify` (`REQUIRE_INTEGRATION=1`) | **147 passed, 0 skipped, 0 failed** (JUnit) | `R\junit.xml`, `R
-ehearsal.log` | VERIFIED |
-| Cross-process workflows | `tests/integration/test_sandbox_workflows.py` (in the suite) | 7 passed. Covers: waitlist, urgency update with stable queue identity, release/promotion, cancel; idempotent replay, mismatch, and concurrent retries; lost ACK with a stable operation ID; unavailable dependencies; allocator crash recovered after restart; stale fencing (Triage and Bed); independent pools plus 50×2-allocator contention | same | VERIFIED |
-| Outbox → local brokers | `tests/integration/test_sandbox_events.py` | 3 passed. Covers: schema, keys and sequences on Kafka and Pub/Sub; Kafka outage with backoff while Pub/Sub continues, then drain; publish-then-crash redelivers the same identity, and the stale ACK is refused | same | VERIFIED |
-| Dependency contract acceptance | `tests/acceptance` (sandbox target) | 4 passed | same | VERIFIED (real endpoints: EXTERNAL BLOCKER) |
-| Migrations | `tests/test_migrations_postgres.py` | empty → head with no drift; 02 → head with legacy rows; 03 → 02 → head | same | VERIFIED |
-| Load: contention | `Sandbox.ps1 load` | 50 admissions, 10 beds, 2 allocators → **10 ALLOCATED / 40 WAITLISTED / 10 distinct beds**, 0 violations; p95 4.9 s (bound 8 s) | `R\load-evidenceudit-contention.json`, `k6-contention.log` | VERIFIED (MOCK dependencies) |
-| Load: sustained multi-pool | same, 2 min, 20 VUs, 3 pools, discharge churn | 4,414 requests, checks 99.97% (1 Triage PUT 504 after retries); audit: 40 ALLOCATED / 415 WAITLISTED / 418 RELEASED, 0 unsettled, 6 outbox streams gap-free and drained | `R\load-evidenceudit-sustained.json`, `k6-sustained.log`, `manifest.json` | VERIFIED (MOCK dependencies) |
-| Observability | same (`observability.json`) | 3/3 Prometheus targets up; 3 rules loaded; Grafana datasource and dashboard provisioned; Grafana → Prometheus proxy query returns data; non-Kubernetes dashboard panels return series (HPA and pod-CPU panels need kube-state-metrics, so 0 series locally); endpoint labels are route templates only; 7,729 JSON log lines carry k6 request IDs | `R\load-evidence\observability.json` | VERIFIED (local) |
-| Alert rules | `promtool check rules`, `promtool test rules alerts.test.yml` | 3 rules valid; all rule tests SUCCESS | (main tree, same files) | VERIFIED |
-| OpenAPI / protobuf | `openapi_spec_validator` ×3; `compile_proto.py` and `git diff` | all OK; no diff | — | VERIFIED |
-| Compose | `docker compose config` (main and sandbox) | valid | — | VERIFIED |
-| Terraform (Ruchir's code, unchanged) | `terraform fmt -check`; `init -backend=false` and `validate` (both roots) | formatted; both roots valid (v1.15.8) | — | VERIFIED (no plan, state, or apply) |
-| Kubernetes templates | `kubectl kustomize` and kubeconform (K8s 1.30, strict) | 16 valid, 2 CRDs skipped | — | VERIFIED |
-| Manifest consistency / release gate | `tests/test_k8s_manifests.py`, `tests/test_release_config.py`, `check_release_config.py` | 5 and 3 passed; the gate exits 1 on the templates (expected) | — | VERIFIED |
-| Images | `docker build` ×3; `smoke_image.py` (Allocation, Triage) | Allocation: healthz 200, readyz 200, 404, SIGTERM exit 0 in 0.7 s. Triage: healthz 200, readyz 503 without a Coordinator, exit 0 in 0.8 s | main tree, image tags `:2032c31` | VERIFIED |
-| GitHub Actions CI | workflow in `.github/workflows/ci.yml` | **NOT RUN / NOT OBSERVED.** The branch is not pushed, and there is no `gh`/API access here | — | NOT RUN |
-| GKE, HPA, Cloud Logging, real brokers or teammate services | — | — | — | EXTERNAL BLOCKER |
-
-## Boundaries, risks, safeguards
-
-- **Stand-ins are not teammate services.** The shared Lock, Bed, Staff and Patient process models exclusivity, expiry, monotonic fencing, operation-ID idempotency and ownership. It proves Allocation/Triage behaviour across processes. It does not prove ZooKeeper, Bed Registry or Staff Scheduler correctness, or distributed safety. The documented race between external lease validation and the Firestore commit remains unaddressed.
-- **Local brokers are not production brokers.** The KRaft Kafka and Pub/Sub emulator test the real adapters only. Delivery is at-least-once: duplicates keep their `event_id`/`stream_sequence`, and neither exactly-once delivery nor strict broker ordering under claim expiry is claimed.
-- **Local latency is not a performance result.** The single-pool 50-way contention p95 is pool-lock serialization on the emulators. It was ~4.9 s on 2026-11-06 and is ~12.6 s on this machine on 2026-11-11 for both the current code and the 2026-11-06 code. Sustained p95 is ~5 s locally. Neither is HPA or GKE evidence.
-- **Lease renewal and demo controls are double-verified only.** The real Coordinator's `Renew` semantics (expiry clock, refusal reasons) need Nisarg's service. `lock=false` relies on downstream fencing; Jay's Bed Registry must refuse unlocked mutations, and that is not verified.
-- **Residual load errors.** Up to about 1% of Triage PUTs (1 of 874 in the final run) still return 504 after 4 same-key retries under churn (pool-lock wait). These are retryable and leave no inconsistent state.
-- **Production setting to review.** The Triage gRPC server uses 10 worker threads (`services/triage/grpc_server.py`). Size it against Allocation fan-out before staging load; it is unchanged here.
-- **Cleanup.** `infra-down` removes only the `hospital-sandbox` containers (tmpfs, no volumes). The main `compose.yaml` stack, its `pgdata` volume, and the original `hospital_allocation` database are never touched.
-
-## External blockers and acceptance checklist
-
-| Item | Owner | Needed |
-|---|---|---|
-| Kafka platform: Terraform provisions Confluent Cloud, which conflicts with Kafka + ZooKeeper on GKE | Ruchir + Jay | Owner decision (not resolved here) |
-| Staff Scheduler defect: `FirestoreStaffRepository._on_shift` passes a `CollectionReference` to `transaction.get()` | Ruchir | Apply or replace `docs/proposed-fixes/staff-scheduler-transaction-get.patch`; then remove the strict xfail |
-| Terraform declares Allocation DB users, `pubsub.publisher`, Secret Manager IAM, GKE add-ons, and Pub/Sub -> Eventarc -> Cloud Run | Ruchir | Written in Terraform; **not planned or applied** (no state) |
-| Lock Coordinator, including `Renew` | Nisarg | Merge, then run `tests/acceptance` and the renewal checks against the real service |
-| Bed Registry: fencing refusal of unlocked or stale mutations, operation-ID idempotency | Jay | Merge, then run `tests/acceptance` (mutation checks with designated test resources) |
-| Notification contract: `stream_sequence` and nullable `ward` | Nisarg | **Accepted, user-reported sign-off** (2026-11-11). His implementation is not verified here; Jay's Kafka consumer acceptance is still pending |
-| Endpoints in `k8s/overlays/staging/*.properties`, image digests, release gate | Pratham + owners | After the merges and GCP outputs |
-| GitHub CI run | Pratham | Observe the workflow for this branch's PR |
-
-**Replacing stand-ins with real endpoints:**
-
-1. Run the contract checks:
-   ```powershell
-   $env:ACCEPTANCE_LOCK_ADDR='<host:port>'; $env:ACCEPTANCE_BED_ADDR='...'; $env:ACCEPTANCE_STAFF_ADDR='...'
-   $env:ACCEPTANCE_PATIENT_URL='https://.../api/v1'; $env:ACCEPTANCE_POOL_ID='<test pool>'; $env:ACCEPTANCE_ADMISSION_ID='<test admission>'
-   $env:ACCEPTANCE_BED_ID='<test bed>'
-   .\.venv\Scripts\python.exe -m pytest tests\acceptance -q
-   ```
-   These checks are read-only. Add `ACCEPTANCE_ALLOW_MUTATION=1` only with designated test resources, never production or real patient data.
-2. Put the endpoints in `k8s/overlays/staging/*.properties`.
-3. Pin the image digests (`scripts\gitops\Set-ImageDigest.ps1`).
-4. Run `scripts\check_release_config.py` until it passes.
-5. Follow `docs/gcp-integration-runbook.md`.
-
-## Revision
-
-Current: `1a9ed1d` on `feature/precloud-renewal` (from `origin/master` `4c12fd2`), plus this documentation commit; most rows were
-produced at `ba2461d`, the only intervening change being the race fix and its tests. The tree is
-dirty only because of Ruchir's uncommitted `infra/terraform/outputs.tf` edit, which is carried over and not committed. A stale,
-duplicate `.gitignore` edit from the old local `master` was saved to the session scratchpad and dropped, because `origin/master`
-already contains every line of it. Historical: `2032c31` (clean rehearsal clone, 2026-11-06).
+| Pratham | Push the combined branch / update PR #8 (needs approval); observe CI on it. Staging: image push, overlay values, approved migration, HPA/Cloud Logging run (runbook §11). Local latency stays an open item |
+| Ruchir | Apply `docs/proposed-fixes/staff-scheduler-transaction-get.patch`, then remove its strict xfail. Add Patient/Staff manifests and confirm `staff-scheduler-service:50051`, `patient-registry-service:8000`. Terraform: notification Cloud Run SA lacks `roles/datastore.user`; container lacks `FIRESTORE_PROJECT_ID` (the entrypoint raises `KeyError` without it); kube-state/cAdvisor collection for the HPA and health panels. Kafka/Confluent decision with Jay. No plan/apply yet |
+| Jay | Bed Registry: manifests are not in any kustomization/ArgoCD app; Deployment has no database URL, so it silently uses in-memory SQLite (2 replicas, split state); it auto-seeds demo beds; it accepts token 0 on a pool with no fenced writes; CI does not build its image. Analytics: deduplicate by `event_id` (strict xfail) |
+| Nisarg | Notification: Firestore project env and datastore role as above; Eventarc → Cloud Run delivery unverified. PodMonitoring, ZooKeeper one-node-down demo and DLQ are his, in progress. Lock requests carry no request ID (no field in `lock.proto`) |
+| Shared contract | None changed |
