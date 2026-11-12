@@ -348,3 +348,26 @@ def test_claims_and_tombstones_are_cleaned_up(replica):
     assert replica.zk.get_children(f"{zk_store.ACQUIRE_ROOT}/{POOL}") == []
     assert zk_store.reap_tombstones(replica.zk, max_age_ms=0) == 1
     assert replica.zk.get_children(f"{zk_store.RELEASED_ROOT}/{POOL}") == []
+
+def test_a_retry_after_the_tombstone_window_reports_not_confirmed(replica):
+    lease = replica.client.acquire(POOL, "alice", "req-1", 60000, 1000)
+    assert replica.client.release(lease.lock_id, "alice")
+
+    # Simulate the 10-minute window passing: the reaper removes the tombstone.
+    assert zk_store.reap_tombstones(replica.zk, max_age_ms=0) == 1
+
+    assert not replica.client.release(lease.lock_id, "alice")  # Not confirmed any more.
+
+
+def test_release_of_an_expired_but_unreaped_lock_returns_true(hosts):
+    zk = zk_store.connect(hosts)  # No reaper runs here, so the expired lock stays in place.
+    try:
+        path = zk_store.join_queue(zk, POOL, "alice", "req-1", 50, 1000)
+        zk_store.start_lease(zk, path)
+        time.sleep(0.2)
+
+        assert zk_store.validate(zk, path, "alice", zk_store.fencing_token(zk, path)) == (False, "LEASE_NOT_HELD")
+        # Documented in docs/contracts.md: true here is not proof the lease was still valid.
+        assert zk_store.release(zk, path, "alice")
+    finally:
+        zk.stop()

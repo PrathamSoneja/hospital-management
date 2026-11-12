@@ -102,6 +102,27 @@ message MutationContext {
 
 Every state mutation RPC (`TriageService.Enqueue`, `TriageService.RemoveEntry`, `BedService.AllocateBed`, `StaffScheduler.AssignStaff`) requires a valid `MutationContext`. Receivers reject invocations if the fencing token is stale or ownership does not match.
 
+
+### Lock Coordinator (`hospital.v1.LockCoordinator`)
+
+Lock state lives in ZooKeeper, so any replica can serve any call.
+
+- **`lock_id`** is `<pool_id>/lock-<10 digits>`. **`fencing_token`** is the lock znode's `czxid`: it increases per pool, but not by 1.
+- **Acquire** waits up to `wait_timeout_ms`, then returns `DEADLINE_EXCEEDED`. The lease (`lease_ms`, set by the caller) starts when the lock is granted. Retries with the same `owner_id` and `acquire_id`, even simultaneous ones on different replicas, share one place in line and get the same lease.
+- **Renew** returns `success=false` for a wrong owner or an expired lease. Simultaneous renews by the owner all succeed.
+- **Validate** returns `LEASE_NOT_HELD`, `NOT_OWNER` or `STALE_FENCING_TOKEN`. It is an external check, not atomic with any downstream commit (see `docs/decisions.md` §3).
+- **Release** is retry-safe. On release, the Coordinator writes a tombstone recording the owner; tombstones are removed after **10 minutes**.
+
+| Release situation | `success` |
+|---|---|
+| Owner releases a held lock | `true` |
+| Owner retries within 10 minutes of releasing | `true` |
+| Owner retries after the 10-minute tombstone window | `false` |
+| Lease expired **and was reaped** before the release | `false` |
+| Lease expired but **not yet reaped** (the reaper runs every 0.5 s) | `true` |
+| Any call by a different owner | `false` |
+
+`false` means "release not confirmed or lease not held"; it is not proof that business operations failed. `true` is not proof that the lease stayed valid until the release; fencing tokens provide that guarantee.
 ---
 
 ## 5. Event Specifications
@@ -111,7 +132,7 @@ Triggered by Bed Allocation state changes, delivered to Cloud Run serverless fun
 - **Payload Schema**: [`contracts/events/notification.schema.json`](file:///contracts/events/notification.schema.json)
 - **Supported Event Types**: `BED_ALLOCATED`, `ALLOCATION_WAITLISTED`, `BED_RELEASED`, `ALLOCATION_CONFLICT`.
 - **Ordering/deduplication**: `event_id` is stable per event; `stream_sequence` increases per (`pool_id`, destination) in producer-commit order. Delivery is at-least-once: deduplicate on `event_id`, use gaps to detect missing messages, and do not discard lower sequences automatically. Attributes `event_id`, `pool_id`, `stream_sequence` are set on each message.
-- **Ward**: the Bed Registry ward of the assigned bed, or `null` when none is assigned (waitlisted). Route staff notifications by `pool_id`; do not infer a ward. Acceptance by the Notification owner (Nisarg) is pending.
+- **Ward**: the Bed Registry ward of the assigned bed, or `null` when none is assigned (waitlisted). Route staff notifications by `pool_id`; do not infer a ward. Accepted by the Notification owner (Nisarg): the handler requires `stream_sequence` and accepts `ward: null`.
 
 ### Bed Event (`bed-events` on Kafka)
 Triggered for stream processing by Apache Flink on Dataproc.
