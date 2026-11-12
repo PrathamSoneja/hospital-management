@@ -310,6 +310,10 @@ class BedAllocationDomainService:
                 .first()
             )
             if active:
+                if idempotency_key:
+                    cached = self._check_idempotency(session, idempotency_key, "POST /api/v1/allocations", req.model_dump())
+                    if cached:
+                        return cached if isinstance(cached, AllocationResponse) else AllocationResponse(**cached)
                 raise AppException(
                     code="ACTIVE_ALLOCATION_EXISTS",
                     message=f"An active allocation or waitlist entry ({active.allocation_id}) already exists for admission '{req.admission_id}'",
@@ -384,7 +388,7 @@ class BedAllocationDomainService:
                 session.commit()
             except IntegrityError as error:
                 session.rollback()
-                if idempotency_key and _is_idempotency_claim_conflict(error):
+                if idempotency_key and (_is_idempotency_claim_conflict(error) or _is_active_admission_conflict(error)):
                     with self.session_factory() as retry_session:
                         cached = self._check_idempotency(
                             retry_session, idempotency_key, "POST /api/v1/allocations", req.model_dump()

@@ -46,7 +46,7 @@ def _scalar(url, sql):
 def test_empty_bootstrap_reaches_head_without_model_drift():
     url = _recreate("hospital_migration_empty_test")
     _alembic(url, "upgrade", "head")
-    assert "20261031_03 (head)" in _alembic(url, "current")
+    assert "20261031_04 (head)" in _alembic(url, "current")
     assert "No new upgrade operations detected" in _alembic(url, "check")
 
 

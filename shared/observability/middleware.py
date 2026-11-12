@@ -10,8 +10,10 @@ from typing import Callable
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import PlainTextResponse
 from starlette.concurrency import run_in_threadpool
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from shared.observability.metrics import HTTP_REQUESTS_TOTAL, HTTP_REQUEST_DURATION_SECONDS
+from shared.observability.metrics import (
+    CONTENT_TYPE_LATEST, generate_latest,
+    HTTP_REQUESTS_TOTAL, HTTP_REQUEST_DURATION_SECONDS
+)
 
 class ObservabilityASGIMiddleware:
     def __init__(self, app, service_name: str):
