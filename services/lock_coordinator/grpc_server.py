@@ -1,6 +1,7 @@
 """gRPC server for hospital.v1.LockCoordinator. All lock state lives in ZooKeeper."""
 import logging
 import os
+import signal
 import re
 import threading
 from concurrent import futures
@@ -96,7 +97,8 @@ def serve():
 
     stop = threading.Event()
     threading.Thread(target=reaper_loop, args=(zk, stop), daemon=True).start()
-
+    # Kubernetes sends SIGTERM first. Stopping the server lets the finally block close ZooKeeper cleanly.
+    signal.signal(signal.SIGTERM, lambda signum, frame: server.stop(5))
     server.start()
     logger.info("Lock Coordinator listening on port %s", port)
     try:
