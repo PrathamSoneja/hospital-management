@@ -6,7 +6,7 @@ import os
 import hashlib
 from typing import List, Optional, Tuple
 from google.cloud import firestore
-from google.api_core.exceptions import DeadlineExceeded, GoogleAPICallError
+from google.api_core.exceptions import Aborted, DeadlineExceeded, GoogleAPICallError
 from services.triage.models import TriageRecord, WaitlistEntry
 from services.triage.repository.base import TriageRepository, QueueEnqueueResult, QueueMutationResult, TriageUpdateResult
 from services.triage.idempotency import validate_put_claim
@@ -37,6 +37,13 @@ class FirestoreTriageRepository(TriageRepository):
             raise AppException("DEADLINE_EXCEEDED", "Firestore operation exceeded its deadline", status.HTTP_504_GATEWAY_TIMEOUT, retryable=True) from error
         except GoogleAPICallError as error:
             raise AppException("SERVICE_UNAVAILABLE", "Firestore is unavailable", status.HTTP_503_SERVICE_UNAVAILABLE, retryable=True) from error
+        except ValueError as error:
+            # firestore.transactional gives up after its attempts with ValueError chained to Aborted
+            # (lock contention). The transaction was rolled back, so the caller may retry.
+            if isinstance(error.__cause__, Aborted):
+                raise AppException("SERVICE_UNAVAILABLE", "Firestore transaction contention; retry",
+                                   status.HTTP_503_SERVICE_UNAVAILABLE, retryable=True) from error
+            raise
 
     def check_ready(self, timeout_s: float = 0.5) -> bool:
         try:

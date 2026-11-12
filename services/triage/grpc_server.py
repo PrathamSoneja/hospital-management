@@ -45,6 +45,7 @@ class TriageGrpcServicer(triage_pb2_grpc.TriageServiceServicer):
             )
         except Exception as e:
             code = "INTERNAL"
+            logger.exception("triage_grpc_internal_error", extra={"event": "triage_grpc_internal_error", "request_id": request_id})
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
             return triage_pb2.GetTriageResponse(found=False)
@@ -86,6 +87,7 @@ class TriageGrpcServicer(triage_pb2_grpc.TriageServiceServicer):
             return triage_pb2.EnqueueWaitlistResponse()
         except Exception as e:
             code = "INTERNAL"
+            logger.exception("triage_grpc_internal_error", extra={"event": "triage_grpc_internal_error", "request_id": request_id})
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
             return triage_pb2.EnqueueWaitlistResponse()
@@ -115,6 +117,7 @@ class TriageGrpcServicer(triage_pb2_grpc.TriageServiceServicer):
             )
         except Exception as e:
             code = "INTERNAL"
+            logger.exception("triage_grpc_internal_error", extra={"event": "triage_grpc_internal_error", "request_id": request_id})
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
             return triage_pb2.PeekNextWaitlistResponse(found=False)
@@ -152,6 +155,7 @@ class TriageGrpcServicer(triage_pb2_grpc.TriageServiceServicer):
             return triage_pb2.RemoveWaitlistEntryResponse(success=False)
         except Exception as e:
             code = "INTERNAL"
+            logger.exception("triage_grpc_internal_error", extra={"event": "triage_grpc_internal_error", "request_id": request_id})
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(e))
             return triage_pb2.RemoveWaitlistEntryResponse(success=False)
