@@ -1,0 +1,9 @@
+# CI-only override, used when SANDBOX_INTERNAL_OBSERVABILITY=1 (see tests/sandbox/cli.py).
+# Prometheus and Grafana publish no host ports in CI, so they cannot collide with a port already in use
+# on the runner; the CLI reaches them by Compose service DNS from inside the network. The host-run tests
+# and services still need the other published ports. Local runs keep 49090/43000.
+services:
+  prometheus:
+    ports: !reset []
+  grafana:
+    ports: !reset []

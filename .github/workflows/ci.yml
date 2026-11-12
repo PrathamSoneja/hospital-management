@@ -20,6 +20,9 @@ jobs:
     timeout-minutes: 45
     env:
       GRAFANA_ADMIN_PASSWORD: local-ci-only  # only for `docker compose config` of the main Compose file
+      # Sandbox Prometheus/Grafana publish no host ports in CI (tests/sandbox/compose.ci.yaml); the CLI
+      # queries them by Compose service DNS, so runner ports in use cannot break infra-up.
+      SANDBOX_INTERNAL_OBSERVABILITY: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

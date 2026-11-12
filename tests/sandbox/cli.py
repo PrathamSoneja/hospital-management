@@ -26,7 +26,11 @@ from tests.sandbox.audit import audit
 from tests.sandbox.runtime import (DEMO_ENV, EXPIRY_DEMO_ENV, REPO_ROOT, Sandbox, fixture_contention, fixture_multipool,
                                    http_json, wait_until)
 
-COMPOSE = ["docker", "compose", "-f", str(REPO_ROOT / "tests" / "sandbox" / "compose.yaml")]
+# CI sets SANDBOX_INTERNAL_OBSERVABILITY=1: Prometheus/Grafana publish no host ports (compose.ci.yaml) and are
+# queried by Compose service DNS from inside the network; locally they stay on localhost:49090/43000.
+INTERNAL_OBSERVABILITY = os.environ.get("SANDBOX_INTERNAL_OBSERVABILITY") == "1"
+COMPOSE = ["docker", "compose", "-f", str(REPO_ROOT / "tests" / "sandbox" / "compose.yaml")] + (
+    ["-f", str(REPO_ROOT / "tests" / "sandbox" / "compose.ci.yaml")] if INTERNAL_OBSERVABILITY else [])
 K6_IMAGE = "grafana/k6:0.54.0"
 PORTS = {"deps_grpc": 47051, "deps_http": 47080, "triage_rest": 47101, "triage_grpc": 47151,
          "allocator_0": 47201, "allocator_1": 47202,
@@ -42,8 +46,24 @@ ENV = {  # sandbox Compose endpoints (tests/sandbox/compose.yaml)
     "SANDBOX_KAFKA_BOOTSTRAP": "localhost:49092",
     "ZK_TEST_HOSTS": "localhost:42181",
 }
-PROMETHEUS = "http://localhost:49090"
-GRAFANA = "http://localhost:43000"
+PROMETHEUS = "http://prometheus:9090" if INTERNAL_OBSERVABILITY else "http://localhost:49090"
+GRAFANA = "http://grafana:3000" if INTERNAL_OBSERVABILITY else "http://localhost:43000"
+
+
+def observability_get(url: str, headers=None):
+    """GET Prometheus/Grafana: from the host locally, or by service DNS inside the Compose network in CI."""
+    if not INTERNAL_OBSERVABILITY:
+        return http_json("GET", url, headers=headers)
+    args = COMPOSE + ["exec", "-T", "prometheus", "wget", "-q", "-O", "-", "-T", "10"]
+    for key, value in (headers or {}).items():
+        args += ["--header", f"{key}: {value}"]
+    result = subprocess.run(args + [url], cwd=REPO_ROOT, capture_output=True, text=True)
+    if result.returncode != 0:  # busybox wget gives no status code; any HTTP error or network failure lands here
+        return 0, None, {}
+    try:
+        return 200, json.loads(result.stdout), {}
+    except ValueError:
+        return 200, result.stdout, {}
 
 
 def run(command, check=True, **kwargs):
@@ -149,25 +169,25 @@ def _settle(sandbox: Sandbox, pools, timeout=180):
 def _observability(sandbox: Sandbox, out: Path) -> dict:
     auth = {"Authorization": "Basic " + base64.b64encode(b"admin:sandbox-only").decode()}
     result = {}
-    status, targets, _ = http_json("GET", f"{PROMETHEUS}/api/v1/targets")
+    status, targets, _ = observability_get(f"{PROMETHEUS}/api/v1/targets")
     result["prometheus_targets"] = [{"job": t["labels"]["job"], "instance": t["labels"]["instance"], "health": t["health"]}
                                     for t in (targets or {}).get("data", {}).get("activeTargets", [])]
-    rules = http_json("GET", f"{PROMETHEUS}/api/v1/rules")[1] or {}
+    rules = observability_get(f"{PROMETHEUS}/api/v1/rules")[1] or {}
     result["prometheus_rules"] = [r["name"] for g in rules.get("data", {}).get("groups", []) for r in g["rules"]]
     dashboard = json.loads((REPO_ROOT / "monitoring" / "dashboards" / "hospital_overview.json").read_text())
     queries = {}
     for panel in dashboard["panels"]:
         for target in panel.get("targets", []):
             expr = target["expr"]
-            body = http_json("GET", f"{PROMETHEUS}/api/v1/query?query={urllib.parse.quote(expr)}")[1] or {}
+            body = observability_get(f"{PROMETHEUS}/api/v1/query?query={urllib.parse.quote(expr)}")[1] or {}
             queries[expr] = {"panel": panel["title"], "series": len(body.get("data", {}).get("result", []))}
     result["dashboard_queries"] = queries
-    endpoints = http_json("GET", f"{PROMETHEUS}/api/v1/label/endpoint/values")[1] or {}
+    endpoints = observability_get(f"{PROMETHEUS}/api/v1/label/endpoint/values")[1] or {}
     result["endpoint_label_values"] = endpoints.get("data", [])
-    result["grafana_health"] = http_json("GET", f"{GRAFANA}/api/health")[0]
-    result["grafana_datasources"] = [d["uid"] for d in (http_json("GET", f"{GRAFANA}/api/datasources", headers=auth)[1] or [])]
-    result["grafana_dashboards"] = [d["title"] for d in (http_json("GET", f"{GRAFANA}/api/search?type=dash-db", headers=auth)[1] or [])]
-    proxied = http_json("GET", f"{GRAFANA}/api/datasources/proxy/uid/prometheus/api/v1/query?query=up", headers=auth)
+    result["grafana_health"] = observability_get(f"{GRAFANA}/api/health")[0]
+    result["grafana_datasources"] = [d["uid"] for d in (observability_get(f"{GRAFANA}/api/datasources", headers=auth)[1] or [])]
+    result["grafana_dashboards"] = [d["title"] for d in (observability_get(f"{GRAFANA}/api/search?type=dash-db", headers=auth)[1] or [])]
+    proxied = observability_get(f"{GRAFANA}/api/datasources/proxy/uid/prometheus/api/v1/query?query=up", headers=auth)
     result["grafana_to_prometheus_up_series"] = len(((proxied[1] or {}).get("data") or {}).get("result", []))
     # Structured logs: JSON lines carrying the k6 request IDs.
     correlated = 0
