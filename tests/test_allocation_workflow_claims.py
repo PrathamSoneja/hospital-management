@@ -89,6 +89,34 @@ def test_recovery_does_not_run_a_healthy_in_flight_create(pg_sessions):
     assert lock.acquire_calls == 1
 
 
+def test_worker_waiting_for_the_lease_does_not_act_on_state_settled_meanwhile(pg_sessions):
+    """Regression from the real-services sandbox (13 s operation, 8 s claim): a request read its next
+    action, its claim lapsed before it got the pool lease, a recovery worker settled the allocation, and
+    the request then acted on its stale read - leaving it WAITLISTED with a reserved bed and staff."""
+    lock = GatedLockClient(StatefulLockCoordinator())
+    service, beds, staff = _service(pg_sessions, lock)
+    result = {}
+    thread = threading.Thread(target=lambda: result.setdefault("r", service.create_allocation(
+        CreateAllocationRequest(admission_id="adm-1", pool_id="POOL-A"), "req-1", "key-1")))
+    thread.start()
+    assert lock.entered.wait(10)  # the request has read its next action and is waiting for the lease
+    _expire_claims(pg_sessions)
+    assert service.recover_pending() == 1  # a peer takes over and settles the allocation
+    with pg_sessions() as session:
+        allocation_id = session.query(AllocationModel).filter_by(admission_id="adm-1").one().allocation_id
+    assert service.get_allocation(allocation_id).status == "ALLOCATED"
+
+    lock.proceed.set()
+    thread.join(10)
+    assert not thread.is_alive()
+    settled = service.get_allocation(allocation_id)
+    assert (settled.status, settled.bed_id, settled.pending_action) == ("ALLOCATED", "bed-1", None)
+    assert result["r"].status == "ALLOCATED"
+    assert beds.beds["bed-1"].current_allocation_id == allocation_id
+    assert len(staff.assignments) == 1
+    assert service.triage_client.service.list_waitlist("POOL-A")[0] == []
+
+
 def test_unconfirmed_lock_release_resumes_to_durable_outcome(pg_sessions):
     lock = GatedLockClient(StatefulLockCoordinator())
     lock.proceed.set()

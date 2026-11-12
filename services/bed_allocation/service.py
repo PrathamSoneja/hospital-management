@@ -492,6 +492,18 @@ class BedAllocationDomainService:
             )
         if demo and demo.pause_ms:
             time.sleep(demo.pause_ms / 1000)  # demo: the holder pauses while holding (or not renewing) the lease
+        # The pool lease serializes workers. If our claim lapsed while we waited for (or held) it, another
+        # worker may have advanced or settled this allocation, so take the next action from the row as it
+        # is now, never from the read made before the lease.
+        with self.session_factory() as session:
+            record = session.query(AllocationModel).filter_by(allocation_id=allocation_id).one()
+            settled = record.status not in ("PROCESSING", "RECOVERING")
+            workflow = json.loads(record.workflow_data or "{}")
+            action = record.pending_action or "FINALIZE_CREATE"
+        if settled:
+            if lease.lock_id:
+                self._release_pool_lease(lease)
+            return self._allocation_snapshot(allocation_id)
         # One observation per acquisition: the Coordinator-reported queue wait, not RPC or patient wait.
         lock_wait_ms = max(0, int(lease.lock_wait_ms))
         LOCK_WAIT_SECONDS.labels(service="bed-allocation", pool_id=req.pool_id).observe(lock_wait_ms / 1000)
