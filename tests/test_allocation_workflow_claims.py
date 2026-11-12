@@ -117,6 +117,17 @@ def test_worker_waiting_for_the_lease_does_not_act_on_state_settled_meanwhile(pg
     assert service.triage_client.service.list_waitlist("POOL-A")[0] == []
 
 
+def test_settled_create_emits_a_structured_log_with_the_request_id(pg_sessions, caplog):
+    lock = GatedLockClient(StatefulLockCoordinator())
+    lock.proceed.set()
+    service, _, _ = _service(pg_sessions, lock)
+    with caplog.at_level("INFO", logger="bed-allocation-service"):
+        created = service.create_allocation(CreateAllocationRequest(admission_id="adm-1", pool_id="POOL-A"), "req-log-1", "k")
+    settled = [r for r in caplog.records if getattr(r, "event", None) == "allocation_settled"]
+    assert [(r.request_id, r.allocation_id, r.pool_id) for r in settled] == [("req-log-1", created.allocation_id, "POOL-A")]
+    assert "adm-1" not in caplog.text and "pat-1" not in caplog.text  # identifiers of people are not logged
+
+
 def test_unconfirmed_lock_release_resumes_to_durable_outcome(pg_sessions):
     lock = GatedLockClient(StatefulLockCoordinator())
     lock.proceed.set()

@@ -11,6 +11,7 @@ Implements:
 """
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 import threading
 import uuid
@@ -39,6 +40,8 @@ from shared.observability.metrics import (
 )
 from starlette import status
 import time
+
+logger = logging.getLogger("bed-allocation-service")  # JSON handler configured by main.setup_logger
 
 ACTIVE_ADMISSION_INDEX = "uq_allocations_active_admission"
 
@@ -289,6 +292,8 @@ class BedAllocationDomainService:
         # Store the action and exception class only; downstream text can contain
         # identifiers or secrets and is not needed to resume by stable operation ID.
         outcome_unknown = isinstance(error, AppException) and error.code == "OUTCOME_UNKNOWN"
+        logger.warning(f"allocation recovering at {step}: {type(error).__name__}", extra={
+            "event": "allocation_recovering", "allocation_id": allocation_id, "operation_id": operation_id})
         durable_action = "RECONCILIATION_REQUIRED" if outcome_unknown else action
         self._record_step(
             allocation_id, durable_action, operation_id, step, "UNCERTAIN",
@@ -843,6 +848,9 @@ class BedAllocationDomainService:
                 session, idempotency_key, "POST /api/v1/allocations", request_payload, 201, response.model_dump()
             )
             session.commit()
+        logger.info(f"allocation {final_status}", extra={
+            "event": "allocation_settled", "request_id": request_id, "allocation_id": allocation_id,
+            "pool_id": response.pool_id, "duration_ms": int((time.perf_counter() - started_at) * 1000)})
         ALLOCATION_REQUESTS_TOTAL.labels(service="bed-allocation", pool_id=response.pool_id, outcome=final_status).inc()
         ALLOCATION_PROCESSING_SECONDS.labels(service="bed-allocation", pool_id=response.pool_id, outcome=final_status).observe(time.perf_counter() - started_at)
         return response
