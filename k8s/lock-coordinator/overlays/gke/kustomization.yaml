@@ -27,3 +27,6 @@ patches:
         path: /metadata/annotations
         value:
           iam.gke.io/gcp-service-account: PLACEHOLDER_LOCK_COORDINATOR_GSA
+
+components:
+  - ../../components/managed-prometheus
