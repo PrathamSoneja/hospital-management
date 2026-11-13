@@ -34,7 +34,32 @@ CREATE TABLE bed_events (
     'json.ignore-parse-errors' = 'true'
 );
 
--- 2. Sink Table: Kafka topic 'bed-stats'
+-- 2. Deduplicated Events View (handles at-least-once outbox redelivery)
+CREATE VIEW deduplicated_bed_events AS
+SELECT
+    schema_version,
+    event_id,
+    stream_sequence,
+    event_type,
+    event_time,
+    request_id,
+    allocation_id,
+    admission_id,
+    patient_id,
+    pool_id,
+    bed_id,
+    lock_wait_ms,
+    lock_contended,
+    allocation_wait_ms,
+    occupancy_delta
+FROM (
+    SELECT *,
+        ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY event_time ASC) AS row_num
+    FROM bed_events
+)
+WHERE row_num = 1;
+
+-- 3. Sink Table: Kafka topic 'bed-stats'
 CREATE TABLE bed_stats (
     schema_version VARCHAR,
     pool_id VARCHAR,
@@ -55,7 +80,7 @@ CREATE TABLE bed_stats (
     'format' = 'json'
 );
 
--- 3. Stateful 1-minute Tumbling Window Aggregation
+-- 4. Stateful 1-minute Tumbling Window Aggregation over Deduplicated Stream
 INSERT INTO bed_stats
 SELECT
     '1.0.0' AS schema_version,
@@ -76,7 +101,7 @@ SELECT
         ELSE 0.0
     END AS contention_rate
 FROM TABLE(
-    TUMBLE(TABLE bed_events, DESCRIPTOR(event_time), INTERVAL '1' MINUTE)
+    TUMBLE(TABLE deduplicated_bed_events, DESCRIPTOR(event_time), INTERVAL '1' MINUTE)
 )
 GROUP BY pool_id, window_start, window_end;
 

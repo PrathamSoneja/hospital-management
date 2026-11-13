@@ -130,6 +130,32 @@ def test_watermark_advancement_auto_flush():
     assert closed[0].window_start.startswith("2026-11-06T12:00:00")
     assert closed[0].window_end.startswith("2026-11-06T12:01:00")
 
+def test_event_deduplication_by_event_id():
+    engine = StreamAggregatorEngine()
+    event = BedEvent(
+        event_id="evt-dedup-1",
+        stream_sequence=1,
+        event_type="BED_ALLOCATED",
+        event_time="2026-11-06T12:00:10Z",
+        request_id="req-dedup-1",
+        allocation_id="alloc-dedup-1",
+        admission_id="adm-1",
+        patient_id="pat-1",
+        pool_id="WARDA-ICU",
+        bed_id="bed-icu-01",
+        occupancy_delta=1
+    )
+    # Process original event
+    engine.process_event(event)
+    # Process duplicate redelivery
+    closed = engine.process_event(event)
+    assert closed == []
+
+    stats = engine.flush_all_windows()
+    assert len(stats) == 1
+    assert stats[0].allocated == 1
+    assert stats[0].occupancy_at_window_end == 1
+
 def test_in_memory_storage():
     storage = InMemoryAnalyticsStorage()
     stats = BedStats(

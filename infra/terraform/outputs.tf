@@ -58,6 +58,16 @@ output "flink_bucket" {
   value       = module.storage.flink_bucket
 }
 
+output "dataproc_cluster_name" {
+  description = "Name of the Dataproc Flink cluster for real-time stream processing."
+  value       = module.dataproc.cluster_name
+}
+
+output "dataproc_cluster_id" {
+  description = "Unique ID of the Dataproc Flink cluster."
+  value       = module.dataproc.cluster_id
+}
+
 output "firestore_database_name" {
   description = "Firestore Native database resource name."
   value       = module.firestore.database_name

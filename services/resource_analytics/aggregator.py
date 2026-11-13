@@ -12,6 +12,7 @@ Computes 1-minute tumbling windows over Kafka bed-events stream:
 """
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
+from collections import OrderedDict
 import logging
 from services.resource_analytics.models import BedEvent, BedStats
 
@@ -94,12 +95,24 @@ class StreamAggregatorEngine:
         self.pool_occupancies: Dict[str, int] = {}
         # High watermark
         self.max_event_time: Optional[datetime] = None
+        # Track seen event IDs to prevent duplicate counting from at-least-once outbox redelivery (bounded LRU)
+        self.seen_event_ids: OrderedDict[str, None] = OrderedDict()
+        self.max_seen_event_ids: int = 50000
 
     def process_event(self, event: BedEvent) -> List[BedStats]:
         """
         Processes an incoming event, assigns to tumbling window bucket,
         and flushes windows closed by the updated watermark.
+        Deduplicates events by event_id to safely handle at-least-once redelivery.
         """
+        if event.event_id:
+            if event.event_id in self.seen_event_ids:
+                logger.info("Ignoring duplicate bed event %s", event.event_id)
+                return []
+            self.seen_event_ids[event.event_id] = None
+            if len(self.seen_event_ids) > self.max_seen_event_ids:
+                self.seen_event_ids.popitem(last=False)
+
         event_dt = parse_iso_time(event.event_time)
         if self.max_event_time is None or event_dt > self.max_event_time:
             self.max_event_time = event_dt

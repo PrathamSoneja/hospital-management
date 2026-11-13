@@ -16,6 +16,12 @@ images:
   - name: triage
     newName: PLACEHOLDER_REGION-docker.pkg.dev/PLACEHOLDER_PROJECT_ID/PLACEHOLDER_AR_REPOSITORY/triage
     digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: bed-registry
+    newName: PLACEHOLDER_REGION-docker.pkg.dev/PLACEHOLDER_PROJECT_ID/PLACEHOLDER_AR_REPOSITORY/bed-registry
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  - name: resource-analytics
+    newName: PLACEHOLDER_REGION-docker.pkg.dev/PLACEHOLDER_PROJECT_ID/PLACEHOLDER_AR_REPOSITORY/resource-analytics
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
 configMapGenerator:
   - name: allocation-config
     envs: [allocation.properties]
@@ -32,3 +38,13 @@ patches:
       - op: replace
         path: /metadata/annotations/iam.gke.io~1gcp-service-account
         value: PLACEHOLDER_NAME_PREFIX-triage@PLACEHOLDER_PROJECT_ID.iam.gserviceaccount.com
+  - target: {kind: ServiceAccount, name: bed-registry-sa}
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/iam.gke.io~1gcp-service-account
+        value: PLACEHOLDER_NAME_PREFIX-bed-registry@PLACEHOLDER_PROJECT_ID.iam.gserviceaccount.com
+  - target: {kind: ServiceAccount, name: resource-analytics-sa}
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/iam.gke.io~1gcp-service-account
+        value: PLACEHOLDER_NAME_PREFIX-resource-analytics@PLACEHOLDER_PROJECT_ID.iam.gserviceaccount.com

@@ -1,0 +1,69 @@
+================================================================================
+CS/SS G527 CLOUD COMPUTING ASSIGNMENT
+SCENARIO S7: HOSPITAL BED MANAGEMENT SYSTEM
+TEAM TASK DIVISION AND COMPONENT OWNERSHIP
+================================================================================
+
+TEAM ROSTER & BITS STUDENT IDs:
+--------------------------------------------------------------------------------
+Member A: Ruchi Kumar   | ID: 2026H1030083P
+Member B: Pratham Soneja | ID: 2026H1030055P
+Member C: Nisarg Vagh    | ID: 2026H1030066P
+Member D: Jay Patel      | ID: 2026H1030072P
+
+================================================================================
+DETAILED WORKLOAD AND TASK ALLOCATION:
+================================================================================
+
+MEMBER A: Ruchi Kumar (2026H1030083P)
+Assigned Rubric Tasks:
+- Task (a): Patient Registry Service (FastAPI REST service, Cloud SQL PostgreSQL,
+            GCS bucket integration for patient documents, medical record metadata)
+- Task (d): Staff Scheduler Service (FastAPI REST & gRPC server, Cloud Firestore
+            scheduling, shift assignments, and doctor-on-call availability)
+Platform & DevOps Responsibilities:
+- Core Terraform IaC (GKE Standard cluster, VPC network, subnets, IAM Workload Identity)
+- GitOps & ArgoCD Pipeline Architecture (Application definitions, project credentials)
+- Staging environment cluster administration & Google Cloud Secret Manager provisioning
+
+--------------------------------------------------------------------------------
+
+MEMBER B: Pratham Soneja (2026H1030055P)
+Assigned Rubric Tasks:
+- Task (c): Bed Allocation Service (Core distributed orchestrator, transactional outbox,
+            PostgreSQL state machine, gRPC client across dependencies, idempotency)
+- Task (h): Triage Service (REST & gRPC service, patient acuity scoring, priority waitlist,
+            priority-based patient promotion and queue management)
+Platform & DevOps Responsibilities:
+- Kubernetes Workload manifests, Horizontal Pod Autoscaler (HPA) policies, and PDBs
+- Sustained high-contention load testing suite using k6 (contention.js, scaling.js)
+- Unified Observability: Prometheus metrics, Grafana dashboards, and structured JSON logs
+
+--------------------------------------------------------------------------------
+
+MEMBER C: Nisarg Vagh (2026H1030066P)
+Assigned Rubric Tasks:
+- Task (f): Distributed Locking (ZooKeeper 3-node ensemble, Lock Coordinator gRPC service,
+            distributed lock leases with monotonic fencing tokens)
+- Task (b): Notification Service (Serverless Google Cloud Run service, Eventarc,
+            Pub/Sub push subscription handler for discharge and allocation notices)
+Platform & DevOps Responsibilities:
+- ZooKeeper StatefulSet deployment on Kubernetes with persistent volumes and quorum probes
+- Pub/Sub topics, Eventarc triggers, and Cloud Run IAM authorization policies
+- Split-brain mitigation, leader election resilience, and network partition recovery tests
+
+--------------------------------------------------------------------------------
+
+MEMBER D: Jay Patel (2026H1030072P)
+Assigned Rubric Tasks:
+- Task (g): Bed Registry Service (FastAPI REST & gRPC server on port 50053, PostgreSQL inventory,
+            strict positive monotonic fencing token validation, idempotency with replay safety,
+            ownership verification on bed release)
+- Task (e): Resource Analytics Service & Stream Processing (Kafka consumer with visibility
+            on health/ready checks, at-least-once outbox event deduplication by event_id,
+            1-minute tumbling window aggregations, Firestore storage in pool_stats)
+Platform & DevOps Responsibilities:
+- Apache Kafka event streaming platform (Confluent Cloud / GKE Kafka, topics bed-events & bed-stats)
+- Apache Flink SQL stream processing pipeline deployed on Google Cloud Dataproc (flink_job.sql)
+- Cloud Storage bucket for Flink job artifacts, state checkpoints, and analytics persistence
+================================================================================

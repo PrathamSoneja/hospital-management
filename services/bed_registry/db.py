@@ -16,6 +16,15 @@ _ENGINE = None
 _SESSION_FACTORY = None
 
 def get_database_url() -> str:
+    db_url_file = os.environ.get("BED_REGISTRY_DATABASE_URL_FILE") or os.environ.get("DATABASE_URL_FILE")
+    if db_url_file and os.path.exists(db_url_file):
+        try:
+            with open(db_url_file, "r") as f:
+                content = f.read().strip()
+                if content:
+                    return content
+        except Exception:
+            pass
     return (
         os.environ.get("BED_REGISTRY_DATABASE_URL")
         or os.environ.get("DATABASE_URL")

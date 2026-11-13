@@ -172,8 +172,9 @@ services:
       START_GRPC: "true"
       ENVIRONMENT: ${ENVIRONMENT:-local}
       DATABASE_URL: ${BED_REGISTRY_DATABASE_URL:-postgresql+psycopg2://postgres:postgrespassword@postgres:5432/hospital_allocation}
+      BED_REGISTRY_DATABASE_URL: ${BED_REGISTRY_DATABASE_URL:-postgresql+psycopg2://postgres:postgrespassword@postgres:5432/hospital_allocation}
     ports:
-      - "8003:8000"
+      - "8004:8000"
       - "50053:50053"
     depends_on:
       postgres:
