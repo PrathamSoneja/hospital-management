@@ -1,13 +1,18 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
+from google.auth.credentials import AnonymousCredentials
+from google.cloud import firestore
+from google.cloud.firestore_v1 import Query
 
 from services.staff_scheduler.grpc_server import StaffSchedulerGrpcServicer
 from services.staff_scheduler.main import build_app
 from services.staff_scheduler.models import StaffCreate, ShiftCreate
+from services.staff_scheduler.repository.firestore import FirestoreStaffRepository
 from services.staff_scheduler.repository.memory import InMemoryStaffRepository
 from services.staff_scheduler.service import StaffSchedulerService
 from shared.generated.common_pb2 import MutationContext
@@ -153,6 +158,26 @@ def test_capacity_requires_active_nurse_in_active_shift(staff_service, shift_win
 
     assert staff_service.check_capacity("WARDA-ICU") == 1
     assert staff_service.check_capacity("WARDB-GEN") == 0
+
+
+def test_firestore_transactional_shift_read_uses_query() -> None:
+    client = firestore.Client(
+        project="test-project",
+        credentials=AnonymousCredentials(),
+    )
+    staff_ref = client.collection("staff").document("nurse-1")
+    now = datetime.now(timezone.utc)
+    shift = Mock()
+    shift.to_dict.return_value = {
+        "active": True,
+        "starts_at": now - timedelta(minutes=5),
+        "ends_at": now + timedelta(minutes=5),
+    }
+    transaction = Mock()
+    transaction.get.return_value = [shift]
+
+    assert FirestoreStaffRepository._on_shift(staff_ref, now, transaction)
+    assert isinstance(transaction.get.call_args.args[0], Query)
 
 
 def test_grpc_check_assign_replay_and_release(staff_service, shift_window) -> None:

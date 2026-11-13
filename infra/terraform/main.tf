@@ -97,11 +97,12 @@ module "cloudsql" {
 module "notifications" {
   source = "./modules/notifications"
 
-  project_id          = var.project_id
-  region              = var.region
-  name_prefix         = var.name_prefix
-  notification_image  = var.notification_image
-  deletion_protection = var.deletion_protection
+  project_id               = var.project_id
+  region                   = var.region
+  name_prefix              = var.name_prefix
+  notification_image       = var.notification_image
+  deletion_protection      = var.deletion_protection
+  eventarc_subscription_id = var.eventarc_subscription_id
 
   depends_on = [google_project_service.required]
 }

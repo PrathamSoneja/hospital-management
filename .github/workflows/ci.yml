@@ -65,14 +65,13 @@ jobs:
           mkdir -p rendered
           kubectl kustomize k8s/overlays/staging > rendered/staging.yaml
           kubectl kustomize k8s/jobs/allocation-migrate > rendered/migrate.yaml
-          kubectl kustomize k8s/lock-coordinator/overlays/staging > rendered/lock-coordinator.yaml
           kubectl kustomize k8s/overlays/gke > rendered/gke-services.yaml
           kubectl kustomize k8s/overlays/gke/patient-registry > rendered/gke-patient-registry.yaml
           kubectl kustomize k8s/overlays/gke/staff-scheduler > rendered/gke-staff-scheduler.yaml
           kubectl kustomize k8s/lock-coordinator/overlays/gke > rendered/gke-lock-coordinator.yaml
           docker run --rm -v "$PWD/rendered:/m:ro" "$KUBECONFORM_IMAGE" \
             -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0 \
-            /m/staging.yaml /m/migrate.yaml /m/lock-coordinator.yaml \
+            /m/staging.yaml /m/migrate.yaml \
             /m/gke-services.yaml /m/gke-patient-registry.yaml /m/gke-staff-scheduler.yaml /m/gke-lock-coordinator.yaml
           # Templates intentionally hold placeholders; the release gate must reject them.
           if python scripts/check_release_config.py > rendered/release-gate.txt; then
@@ -122,7 +121,7 @@ jobs:
         run: python -m tests.sandbox.cli infra-down
 
   publish-gke-images:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -130,7 +129,7 @@ jobs:
       contents: write
       id-token: write
     concurrency:
-      group: gke-image-promotion-main
+      group: gke-image-promotion-master
       cancel-in-progress: false
     env:
       PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
@@ -243,9 +242,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch origin main
-          if [ "$(git rev-parse origin/main)" != "$GITHUB_SHA" ]; then
-            echo "main advanced after this commit was tested; a newer run will promote its images."
+          git fetch origin master
+          if [ "$(git rev-parse origin/master)" != "$GITHUB_SHA" ]; then
+            echo "master advanced after this commit was tested; a newer run will promote its images."
             exit 0
           fi
           git config user.name "github-actions[bot]"
@@ -257,4 +256,4 @@ jobs:
             exit 0
           fi
           git commit -m "chore(gitops): promote images ${IMAGE_TAG:0:12}"
-          git push origin HEAD:main
+          git push origin HEAD:master

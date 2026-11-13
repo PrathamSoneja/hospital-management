@@ -67,11 +67,6 @@ def staff_client():
         server.stop(grace=0)
 
 
-@pytest.mark.xfail(strict=True, raises=AppException, reason=(
-    "Staff Scheduler defect (Ruchir): FirestoreStaffRepository._on_shift passes a CollectionReference to "
-    "transaction.get(), so AssignStaff fails INTERNAL on Firestore. Proposed one-line fix: "
-    "docs/proposed-fixes/staff-scheduler-transaction-get.patch (verified: this test passes with it). "
-    "strict=True turns the fix into a failure here so this marker gets removed."))
 def test_staff_scheduler_boundary_with_allocation_adapter(staff_client):
     assert staff_client.check_capacity(POOL, "req-1") == (True, 1)
 

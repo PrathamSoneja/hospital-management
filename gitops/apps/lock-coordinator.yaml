@@ -9,7 +9,7 @@ spec:
   project: hospital-system
   source:
     repoURL: https://github.com/PrathamSoneja/hospital-management.git
-    targetRevision: main
+    targetRevision: master
     path: k8s/lock-coordinator/overlays/gke
   destination:
     server: https://kubernetes.default.svc

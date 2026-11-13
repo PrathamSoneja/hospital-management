@@ -5,7 +5,11 @@ resource "google_pubsub_topic" "notifications" {
 
 resource "google_pubsub_topic" "dead_letter" {
   project = var.project_id
-  name    = "${var.name_prefix}-bed-notifications-dlq"
+  name    = "bed-notifications-dlq"
+}
+
+data "google_project" "current" {
+  project_id = var.project_id
 }
 
 resource "google_service_account" "notification" {
@@ -49,7 +53,16 @@ resource "google_cloud_run_v2_service" "notification" {
         }
       }
     }
+
   }
+
+  depends_on = [google_project_iam_member.notification_firestore]
+}
+
+resource "google_project_iam_member" "notification_firestore" {
+  project = var.project_id
+  role    = "roles/datastore.user"
+  member  = "serviceAccount:${google_service_account.notification.email}"
 }
 
 resource "google_project_iam_member" "notification_firestore" {
@@ -107,6 +120,63 @@ resource "google_eventarc_trigger" "notifications" {
     google_project_iam_member.eventarc_receiver,
     google_cloud_run_v2_service_iam_member.eventarc_invoker,
   ]
+}
+
+locals {
+  eventarc_subscription_id   = google_eventarc_trigger.notifications.transport[0].pubsub[0].subscription
+  eventarc_subscription_name = basename(local.eventarc_subscription_id)
+  pubsub_service_agent       = "service-${data.google_project.current.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+}
+
+# Eventarc creates and owns its transport subscription. Supply its full resource
+# name after the trigger exists; this import block then brings that subscription
+# under Terraform so its dead-letter policy can be managed without creating a
+# competing subscription.
+resource "google_pubsub_subscription" "eventarc" {
+  for_each = var.eventarc_subscription_id == "" ? {} : {
+    eventarc = var.eventarc_subscription_id
+  }
+
+  project = var.project_id
+  name    = local.eventarc_subscription_name
+  topic   = google_pubsub_topic.notifications.id
+
+  dead_letter_policy {
+    dead_letter_topic     = google_pubsub_topic.dead_letter.id
+    max_delivery_attempts = 10
+  }
+
+  lifecycle {
+    # Eventarc configures the delivery endpoint on this generated subscription.
+    ignore_changes = [push_config]
+  }
+}
+
+import {
+  for_each = var.eventarc_subscription_id == "" ? {} : {
+    eventarc = var.eventarc_subscription_id
+  }
+
+  to = google_pubsub_subscription.eventarc[each.key]
+  id = each.value
+}
+
+resource "google_pubsub_topic_iam_member" "pubsub_dead_letter_publisher" {
+  project = var.project_id
+  topic   = google_pubsub_topic.dead_letter.name
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:${local.pubsub_service_agent}"
+
+  depends_on = [google_eventarc_trigger.notifications]
+}
+
+resource "google_pubsub_subscription_iam_member" "pubsub_source_subscriber" {
+  project      = var.project_id
+  subscription = local.eventarc_subscription_name
+  role         = "roles/pubsub.subscriber"
+  member       = "serviceAccount:${local.pubsub_service_agent}"
+
+  depends_on = [google_eventarc_trigger.notifications]
 }
 
 resource "google_secret_manager_secret" "allocation_database_url" {

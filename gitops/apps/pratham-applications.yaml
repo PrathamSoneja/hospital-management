@@ -1,20 +1,21 @@
-# ArgoCD Applications for Pratham-owned workloads. ArgoCD itself (install, projects, repo
-# credentials) is platform scope owned by Ruchir; these objects are registered by that owner.
-# Both use MANUAL sync until staging is verified; the migration app is always manual.
+# Argo CD child Applications for Allocation/Triage and its migration job.
+# They remain manual-sync until their staging rollout is verified.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: hospital-allocation-triage-staging
   namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
 spec:
-  project: PLACEHOLDER_ARGOCD_PROJECT
+  project: hospital-system
   source:
-    repoURL: PLACEHOLDER_GIT_REPO_URL
-    targetRevision: PLACEHOLDER_GIT_BRANCH
+    repoURL: https://github.com/PrathamSoneja/hospital-management.git
+    targetRevision: master
     path: k8s/overlays/staging
   destination:
     server: https://kubernetes.default.svc
-    namespace: PLACEHOLDER_K8S_NAMESPACE
+    namespace: hospital-system
   # The HPA owns replicas; without this ArgoCD would report drift and reset scaling.
   ignoreDifferences:
     - group: apps
@@ -31,13 +32,15 @@ kind: Application
 metadata:
   name: hospital-allocation-migrations-staging
   namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
 spec:
-  project: PLACEHOLDER_ARGOCD_PROJECT
+  project: hospital-system
   source:
-    repoURL: PLACEHOLDER_GIT_REPO_URL
-    targetRevision: PLACEHOLDER_GIT_BRANCH
+    repoURL: https://github.com/PrathamSoneja/hospital-management.git
+    targetRevision: master
     path: k8s/jobs/allocation-migrate
   destination:
     server: https://kubernetes.default.svc
-    namespace: PLACEHOLDER_K8S_NAMESPACE
+    namespace: hospital-system
   syncPolicy: {}
