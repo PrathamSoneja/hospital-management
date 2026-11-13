@@ -128,10 +128,6 @@ def test_patient_registry_boundary_with_allocation_adapter(patient_base_url):
     assert client.get_admission("adm-does-not-exist", "req-boundary") is None  # 404 -> not found, not an outage
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "Resource Analytics defect (Jay): StreamAggregatorEngine.process_event and flink_job.sql do not "
-    "deduplicate by event_id, but Allocation's outbox delivers at least once, so a redelivered event is "
-    "counted twice (allocated and occupancy)."))
 def test_resource_analytics_counts_a_redelivered_allocation_event_once():
     event = {  # the shape Allocation's outbox publishes to Kafka (validated against the contract below)
         "schema_version": "1.0.0", "event_id": "evt-1", "stream_sequence": 1, "event_type": "BED_ALLOCATED",

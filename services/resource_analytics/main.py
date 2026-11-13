@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
 
-from services.resource_analytics.models import BedEvent
+from services.resource_analytics.models import BedEvent, BedStats
 from services.resource_analytics.storage import create_storage, BaseAnalyticsStorage
 from services.resource_analytics.aggregator import StreamAggregatorEngine
 from services.resource_analytics.rest import router as analytics_router, init_services
@@ -19,6 +19,12 @@ from shared.observability.logging import setup_logger
 from shared.observability.middleware import setup_observability_middleware
 
 logger = setup_logger("resource-analytics-service")
+
+consumer_status = {
+    "started": False,
+    "running": False,
+    "error": None
+}
 
 def start_kafka_consumer_thread(storage: BaseAnalyticsStorage, aggregator: StreamAggregatorEngine, stop_event: threading.Event):
     """Background Kafka consumer thread for topic 'bed-events' or 'bed-stats'."""
@@ -38,6 +44,15 @@ def start_kafka_consumer_thread(storage: BaseAnalyticsStorage, aggregator: Strea
         # Add SASL/SSL credentials if configured
         sasl_user = os.environ.get("KAFKA_SASL_USERNAME", "")
         sasl_pass = os.environ.get("KAFKA_SASL_PASSWORD", "")
+        sasl_user_file = os.environ.get("KAFKA_SASL_USERNAME_FILE")
+        if not sasl_user and sasl_user_file and os.path.exists(sasl_user_file):
+            with open(sasl_user_file) as f:
+                sasl_user = f.read().strip()
+        sasl_pass_file = os.environ.get("KAFKA_SASL_PASSWORD_FILE")
+        if not sasl_pass and sasl_pass_file and os.path.exists(sasl_pass_file):
+            with open(sasl_pass_file) as f:
+                sasl_pass = f.read().strip()
+
         if sasl_user and sasl_pass:
             conf['security.protocol'] = 'SASL_SSL'
             conf['sasl.mechanisms'] = 'PLAIN'
@@ -47,6 +62,9 @@ def start_kafka_consumer_thread(storage: BaseAnalyticsStorage, aggregator: Strea
         consumer = Consumer(conf)
         topic = os.environ.get("KAFKA_INPUT_TOPIC", "bed-events")
         consumer.subscribe([topic])
+        consumer_status["started"] = True
+        consumer_status["running"] = True
+        consumer_status["error"] = None
         logger.info(f"Subscribed to Kafka topic: {topic}")
 
         while not stop_event.is_set():
@@ -59,16 +77,24 @@ def start_kafka_consumer_thread(storage: BaseAnalyticsStorage, aggregator: Strea
 
             try:
                 payload = json.loads(msg.value().decode("utf-8"))
-                event = BedEvent.model_validate(payload)
-                closed = aggregator.process_event(event)
-                for stats in closed:
+                # Support direct ingestion of Flink's BedStats aggregated windows or raw BedEvents
+                if "window_start" in payload and "window_end" in payload and "requests" in payload:
+                    stats = BedStats.model_validate(payload)
                     storage.save_window_stats(stats)
+                else:
+                    event = BedEvent.model_validate(payload)
+                    closed = aggregator.process_event(event)
+                    for stats in closed:
+                        storage.save_window_stats(stats)
             except Exception as e:
                 logger.error(f"Failed to process Kafka message: {e}")
 
         consumer.close()
+        consumer_status["running"] = False
         logger.info("Kafka consumer stopped gracefully.")
     except Exception as e:
+        consumer_status["running"] = False
+        consumer_status["error"] = str(e)
         logger.warning(f"Could not start Kafka consumer: {e}")
 
 def build_app(storage_backend: str | None = None) -> FastAPI:
@@ -96,6 +122,15 @@ def build_app(storage_backend: str | None = None) -> FastAPI:
         if consumer_thread and consumer_thread.is_alive():
             consumer_thread.join(timeout=2.0)
 
+    def check_ready() -> bool:
+        if not storage.check_ready():
+            return False
+        bootstrap = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "").strip()
+        if bootstrap:
+            if not consumer_status["started"] or consumer_status["error"]:
+                return False
+        return True
+
     app = FastAPI(
         title="Hospital Resource Analytics Service",
         version="1.0.0",
@@ -103,7 +138,7 @@ def build_app(storage_backend: str | None = None) -> FastAPI:
     )
 
     register_error_handlers(app, "resource-analytics-service")
-    setup_observability_middleware(app, "resource-analytics-service", ready_check=storage.check_ready)
+    setup_observability_middleware(app, "resource-analytics-service", ready_check=check_ready)
     app.include_router(analytics_router)
     return app
 

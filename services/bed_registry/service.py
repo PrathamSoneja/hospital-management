@@ -112,23 +112,47 @@ class BedRegistryDomainService:
             # 1. Idempotency Check
             prior_op = session.get(BedOperationModel, operation_id)
             if prior_op:
-                bed = session.get(BedModel, prior_op.bed_id)
-                if bed and bed.current_allocation_id == allocation_id:
-                    logger.info("bed_allocate_idempotent_replay", extra={
-                        "event": "bed_allocate_idempotent_replay",
-                        "operation_id": operation_id,
-                        "bed_id": bed_id,
-                        "request_id": request_id
-                    })
-                    return True, BedDto(
-                        bed_id=bed.bed_id,
-                        pool_id=bed.pool_id,
-                        ward=bed.ward,
-                        status=bed.status,
-                        current_allocation_id=bed.current_allocation_id
-                    ), ""
+                if (
+                    prior_op.operation_type == "ALLOCATE"
+                    and prior_op.bed_id == bed_id
+                    and prior_op.allocation_id == allocation_id
+                    and prior_op.fencing_token == fencing_token
+                ):
+                    bed = session.get(BedModel, prior_op.bed_id)
+                    if bed and bed.current_allocation_id == allocation_id:
+                        logger.info("bed_allocate_idempotent_replay", extra={
+                            "event": "bed_allocate_idempotent_replay",
+                            "operation_id": operation_id,
+                            "bed_id": bed_id,
+                            "request_id": request_id
+                        })
+                        return True, BedDto(
+                            bed_id=bed.bed_id,
+                            pool_id=bed.pool_id,
+                            ward=bed.ward,
+                            status=bed.status,
+                            current_allocation_id=bed.current_allocation_id
+                        ), ""
+                msg = f"Operation ID {operation_id} already used with different parameters"
+                logger.warning("bed_allocate_idempotency_conflict", extra={
+                    "event": "bed_allocate_idempotency_conflict",
+                    "operation_id": operation_id,
+                    "request_id": request_id
+                })
+                return False, None, msg
 
             # 2. Check & Update Fencing Token
+            if fencing_token <= 0:
+                STALE_FENCING_REJECTIONS_TOTAL.labels(service="bed-registry", pool_id=pool_id).inc()
+                msg = f"Invalid fencing token {fencing_token}; fencing tokens must be positive integers (> 0)"
+                logger.warning("bed_allocation_invalid_fencing_token", extra={
+                    "event": "bed_allocation_invalid_fencing_token",
+                    "pool_id": pool_id,
+                    "fencing_token": fencing_token,
+                    "request_id": request_id
+                })
+                return False, None, msg
+
             token_record = session.get(PoolFencingTokenModel, pool_id, with_for_update=True)
             current_highest = token_record.highest_fencing_token if token_record else 0
 
@@ -216,9 +240,33 @@ class BedRegistryDomainService:
             # 1. Idempotency Check
             prior_op = session.get(BedOperationModel, operation_id)
             if prior_op:
-                return True, ""
+                if (
+                    prior_op.operation_type == "RELEASE"
+                    and prior_op.bed_id == bed_id
+                    and prior_op.allocation_id == allocation_id
+                    and prior_op.fencing_token == fencing_token
+                ):
+                    return True, ""
+                msg = f"Operation ID {operation_id} already used with different parameters"
+                logger.warning("bed_release_idempotency_conflict", extra={
+                    "event": "bed_release_idempotency_conflict",
+                    "operation_id": operation_id,
+                    "request_id": request_id
+                })
+                return False, msg
 
             # 2. Check Fencing Token
+            if fencing_token <= 0:
+                STALE_FENCING_REJECTIONS_TOTAL.labels(service="bed-registry", pool_id=pool_id).inc()
+                msg = f"Invalid fencing token {fencing_token}; fencing tokens must be positive integers (> 0)"
+                logger.warning("bed_release_invalid_fencing_token", extra={
+                    "event": "bed_release_invalid_fencing_token",
+                    "pool_id": pool_id,
+                    "fencing_token": fencing_token,
+                    "request_id": request_id
+                })
+                return False, msg
+
             token_record = session.get(PoolFencingTokenModel, pool_id, with_for_update=True)
             current_highest = token_record.highest_fencing_token if token_record else 0
 
@@ -245,6 +293,9 @@ class BedRegistryDomainService:
             bed = session.get(BedModel, bed_id, with_for_update=True)
             if not bed:
                 return False, f"Bed {bed_id} not found"
+
+            if bed.pool_id != pool_id:
+                return False, f"Bed {bed_id} belongs to pool {bed.pool_id}, not {pool_id}"
 
             if bed.current_allocation_id != allocation_id:
                 return False, f"Bed {bed_id} is owned by {bed.current_allocation_id}, cannot be released by {allocation_id}"

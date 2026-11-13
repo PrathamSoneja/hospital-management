@@ -162,6 +162,59 @@ def test_idempotent_operation_replay(in_memory_service):
     assert s2 is True
     assert b2.bed_id == b1.bed_id
 
+    # Replay with changed payload -> REJECTED
+    s3, b3, err3 = in_memory_service.allocate_bed(
+        operation_id="op-idempotent-1",
+        pool_id="WARDA-ICU",
+        bed_id="bed-icu-02",  # changed bed!
+        allocation_id="alloc-100",
+        fencing_token=10
+    )
+    assert s3 is False
+    assert "already used with different parameters" in err3
+
+def test_fencing_token_zero_rejected(in_memory_service):
+    # Allocate with fencing token 0 (e.g. no lease held) must be rejected
+    s1, b1, err1 = in_memory_service.allocate_bed(
+        operation_id="op-zero-alloc",
+        pool_id="WARDA-ICU",
+        bed_id="bed-icu-01",
+        allocation_id="alloc-zero",
+        fencing_token=0
+    )
+    assert s1 is False
+    assert "Invalid fencing token 0" in err1
+
+    # Release with fencing token 0 must also be rejected
+    s2, err2 = in_memory_service.release_bed(
+        operation_id="op-zero-rel",
+        pool_id="WARDA-ICU",
+        bed_id="bed-icu-01",
+        allocation_id="alloc-zero",
+        fencing_token=0
+    )
+    assert s2 is False
+    assert "Invalid fencing token 0" in err2
+
+def test_release_bed_wrong_pool(in_memory_service):
+    in_memory_service.allocate_bed(
+        operation_id="op-pool-1",
+        pool_id="WARDA-ICU",
+        bed_id="bed-icu-01",
+        allocation_id="alloc-pool-1",
+        fencing_token=10
+    )
+    # Attempt release specifying wrong pool
+    s, err = in_memory_service.release_bed(
+        operation_id="op-pool-wrong",
+        pool_id="WARDA-HDU",  # wrong pool
+        bed_id="bed-icu-01",
+        allocation_id="alloc-pool-1",
+        fencing_token=11
+    )
+    assert s is False
+    assert "belongs to pool WARDA-ICU, not WARDA-HDU" in err
+
 def test_stale_fencing_token_rejected(in_memory_service):
     """
     CRITICAL VIVA DEMONSTRATION TEST:
@@ -243,7 +296,7 @@ def test_grpc_servicer(in_memory_service):
     assert rel_resp.success is True
 
 def test_rest_api_endpoints():
-    app = build_app(start_grpc=False, db_url="sqlite:///:memory:")
+    app = build_app(start_grpc=False, db_url="sqlite:///:memory:", auto_seed=True)
     client = TestClient(app)
 
     # Health check

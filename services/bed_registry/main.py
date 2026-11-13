@@ -42,7 +42,7 @@ def seed_default_beds_if_empty(service: BedRegistryDomainService):
     if total_seeded > 0:
         logger.info(f"Seeded {total_seeded} initial beds across pools.")
 
-def build_app(start_grpc: bool = False, db_url: str | None = None) -> FastAPI:
+def build_app(start_grpc: bool = False, db_url: str | None = None, auto_seed: bool | None = None) -> FastAPI:
     # 1. Initialize DB Engine & Tables
     init_engine(db_url)
     init_db()
@@ -51,11 +51,15 @@ def build_app(start_grpc: bool = False, db_url: str | None = None) -> FastAPI:
     domain_service = BedRegistryDomainService(session_factory)
     set_service(domain_service)
 
-    # Auto-seed beds if empty
-    try:
-        seed_default_beds_if_empty(domain_service)
-    except Exception as e:
-        logger.warning(f"Could not auto-seed beds: {e}")
+    # Auto-seed beds only if explicitly enabled via argument or AUTO_SEED_DEMO_BEDS=true
+    should_seed = auto_seed if auto_seed is not None else (
+        os.environ.get("AUTO_SEED_DEMO_BEDS", "false").lower() in ("true", "1")
+    )
+    if should_seed:
+        try:
+            seed_default_beds_if_empty(domain_service)
+        except Exception as e:
+            logger.warning(f"Could not auto-seed beds: {e}")
 
     def ready_check():
         try:

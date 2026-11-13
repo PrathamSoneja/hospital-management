@@ -51,6 +51,8 @@ spec:
               value: "8008"
             - name: ENVIRONMENT
               value: "production"
+            - name: KAFKA_INPUT_TOPIC
+              value: "bed-stats"
           resources:
             requests:
               cpu: 100m

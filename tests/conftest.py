@@ -21,6 +21,34 @@ try:
 except (ImportError, AttributeError):
     pass
 
+try:
+    import prometheus_client
+except ImportError:
+    import sys
+    from unittest.mock import MagicMock
+    pm = MagicMock()
+    pm.CONTENT_TYPE_LATEST = "text/plain"
+    pm.generate_latest = lambda *args, **kwargs: b""
+    sys.modules["prometheus_client"] = pm
+
+try:
+    from google.cloud import storage
+except (ImportError, AttributeError):
+    import sys
+    from unittest.mock import MagicMock
+    import google.cloud
+    google.cloud.storage = MagicMock()
+    sys.modules["google.cloud.storage"] = google.cloud.storage
+
+try:
+    from google.cloud import firestore
+except (ImportError, AttributeError):
+    import sys
+    from unittest.mock import MagicMock
+    import google.cloud
+    google.cloud.firestore = MagicMock()
+    sys.modules["google.cloud.firestore"] = google.cloud.firestore
+
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
