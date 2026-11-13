@@ -53,10 +53,6 @@ spec:
               value: "production"
             - name: KAFKA_INPUT_TOPIC
               value: "bed-stats"
-            - name: KAFKA_SASL_USERNAME_FILE
-              value: /var/run/secrets/app/kafka-sasl-username
-            - name: KAFKA_SASL_PASSWORD_FILE
-              value: /var/run/secrets/app/kafka-sasl-password
           resources:
             requests:
               cpu: 100m

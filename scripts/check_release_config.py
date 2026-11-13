@@ -21,7 +21,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DIRS = ["k8s/overlays/staging", "k8s/jobs/allocation-migrate", "k8s/lock-coordinator/overlays/staging"]
-OWN_IMAGES = {"bed-allocation", "triage", "lock-coordinator", "bed-registry", "resource-analytics"}
+OWN_IMAGES = {"bed-allocation", "triage", "lock-coordinator"}
 AR_DIGEST = re.compile(r"^[a-z0-9-]+-docker\.pkg\.dev/[a-z][a-z0-9-]{4,28}[a-z0-9]/[a-z0-9_-]+/"
                        r"(?P<name>[a-z0-9-]+)@sha256:(?P<digest>[0-9a-f]{64})$")
 DNS_LABEL = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")

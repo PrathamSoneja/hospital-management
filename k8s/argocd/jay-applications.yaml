@@ -1,17 +1,35 @@
-# ArgoCD Application for Jay-owned workloads (Bed Registry + Resource Analytics). Like
+# ArgoCD Applications for Jay-owned workloads (Bed Registry + Resource Analytics). Like
 # pratham-applications.yaml, it is registered by the ArgoCD platform owner (Ruchir) and uses
 # MANUAL sync until staging is verified.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: hospital-bed-registry-analytics-staging
+  name: hospital-bed-registry-staging
   namespace: argocd
 spec:
   project: PLACEHOLDER_ARGOCD_PROJECT
   source:
     repoURL: PLACEHOLDER_GIT_REPO_URL
     targetRevision: PLACEHOLDER_GIT_BRANCH
-    path: k8s/overlays/staging
+    path: k8s/bed-registry/base
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: PLACEHOLDER_K8S_NAMESPACE
+  syncPolicy:
+    syncOptions:
+      - ApplyOutOfSyncOnly=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hospital-resource-analytics-staging
+  namespace: argocd
+spec:
+  project: PLACEHOLDER_ARGOCD_PROJECT
+  source:
+    repoURL: PLACEHOLDER_GIT_REPO_URL
+    targetRevision: PLACEHOLDER_GIT_BRANCH
+    path: k8s/resource-analytics/base
   destination:
     server: https://kubernetes.default.svc
     namespace: PLACEHOLDER_K8S_NAMESPACE

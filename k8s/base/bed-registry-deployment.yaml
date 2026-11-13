@@ -59,8 +59,6 @@ spec:
               value: "production"
             - name: AUTO_SEED_DEMO_BEDS
               value: "false"
-            - name: DATABASE_URL_FILE
-              value: /var/run/secrets/app/database-url
           resources:
             requests:
               cpu: 100m
