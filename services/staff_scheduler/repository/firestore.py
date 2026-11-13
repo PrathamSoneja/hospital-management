@@ -184,7 +184,8 @@ class FirestoreStaffRepository:
         if transaction is None:
             shifts = list(staff_ref.collection("shifts").stream(timeout=1.0))
         else:
-            shifts = list(transaction.get(staff_ref.collection("shifts")))
+            shift_query = staff_ref.collection("shifts").select(["active", "starts_at", "ends_at"])
+            shifts = list(transaction.get(shift_query))
         for snapshot in shifts:
             shift = snapshot.to_dict()
             starts_at = shift.get("starts_at")
