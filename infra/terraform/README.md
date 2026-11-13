@@ -54,6 +54,15 @@ Terraform creates Secret Manager secret containers only, not secret values. Popu
 
 The GitHub OIDC provider only accepts the configured repository and branch. The GitHub Actions service account has Artifact Registry write access but no GCP project-wide editor role. The runtime GKE service accounts are bound to their corresponding Kubernetes service accounts in `kubernetes_namespace`; keep those names in sync with GitOps manifests.
 
+Eventarc creates its Pub/Sub transport subscription. The first root apply creates
+the Eventarc trigger and emits its full subscription resource name as
+`eventarc_subscription_id`. To import that generated subscription and configure
+the `bed-notifications-dlq` dead-letter policy, set the Terraform input
+`eventarc_subscription_id` to that output and apply again. The import block then
+imports the existing Eventarc subscription instead of creating a duplicate.
+Terraform also grants the Pub/Sub service agent publisher access to the DLQ
+topic and subscriber access to the Eventarc source subscription.
+
 Install Argo CD only after the GKE cluster has been created. Use the independent
 `infra/terraform/bootstrap_k8s` Terraform stack, a distinct GCS backend prefix, and the same project,
 cluster name, and cluster location. This split avoids configuring Helm against a cluster endpoint

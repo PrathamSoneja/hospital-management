@@ -16,7 +16,13 @@ variable "github_repository" {
 variable "github_branch" {
   description = "Only this branch may request a GitHub Actions cloud identity."
   type        = string
-  default     = "main"
+  default     = "master"
+}
+
+variable "eventarc_subscription_id" {
+  description = "Set to the generated Eventarc Pub/Sub subscription resource name after the first apply to import it and enable the DLQ."
+  type        = string
+  default     = ""
 }
 
 variable "kubernetes_namespace" {

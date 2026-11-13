@@ -134,6 +134,11 @@ output "notification_topic_id" {
   value       = module.notifications.notification_topic_id
 }
 
+output "eventarc_subscription_id" {
+  description = "Full resource name of Eventarc's generated Pub/Sub subscription; use it to configure the DLQ after initial provisioning."
+  value       = module.notifications.eventarc_subscription_id
+}
+
 output "notification_service_uri" {
   description = "Internal Cloud Run URL for the Pub/Sub notification handler."
   value       = module.notifications.notification_service_uri
