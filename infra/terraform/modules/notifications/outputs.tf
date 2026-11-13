@@ -33,3 +33,13 @@ output "patient_registry_secret_id" {
 output "patient_registry_migration_secret_id" {
   value = google_secret_manager_secret.patient_registry_migration_database_url.secret_id
 }
+
+
+output "notification_eventarc_subscription" {
+  description = "The Eventarc-managed subscription that pushes to Cloud Run (carries the dead-letter policy)."
+  value       = local.eventarc_subscription
+}
+
+output "dead_letter_inspection_subscription" {
+  value = google_pubsub_subscription.dead_letter_inspection.id
+}
