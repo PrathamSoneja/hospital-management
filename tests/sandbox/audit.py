@@ -57,10 +57,11 @@ def audit(database_url: str, dependency_state: dict | None = None, pools=None) -
         if occupied != allocated_by_bed:
             violations.append("Bed Registry ownership differs from ALLOCATED rows "
                               f"(registry={len(occupied)}, allocation={len(allocated_by_bed)})")
-        active_assignments = {a["allocation_id"] for a in dependency_state["assignments"].values()
-                              if a["active"] and (pool_set is None or a["pool_id"] in pool_set)}
-        if active_assignments != {row["allocation_id"] for row in allocated}:
-            violations.append("active staff assignments differ from ALLOCATED rows")
+        if "assignments" in dependency_state:  # absent when the real Staff Scheduler (no listing API) is used
+            active_assignments = {a["allocation_id"] for a in dependency_state["assignments"].values()
+                                  if a["active"] and (pool_set is None or a["pool_id"] in pool_set)}
+            if active_assignments != {row["allocation_id"] for row in allocated}:
+                violations.append("active staff assignments differ from ALLOCATED rows")
 
     stream_report = []
     for stream in streams:

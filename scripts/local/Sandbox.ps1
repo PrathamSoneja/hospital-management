@@ -3,7 +3,7 @@
 .EXAMPLE   .\scripts\local\Sandbox.ps1 infra-up          # disposable Postgres/Firestore/Pub/Sub/Kafka/Prometheus/Grafana
 .EXAMPLE   .\scripts\local\Sandbox.ps1 verify            # full pytest suite; any skipped integration test fails
 .EXAMPLE   .\scripts\local\Sandbox.ps1 load -Duration 2m # reset -> seed -> k6 -> invariant audit -> evidence
-.EXAMPLE   .\scripts\local\Sandbox.ps1 up                # interactive: deps + Triage + 2 allocators until Ctrl+C
+.EXAMPLE   .\scripts\local\Sandbox.ps1 up                # interactive: real Lock+Bed, stand-ins, Triage, 2 allocators
 .EXAMPLE   .\scripts\local\Sandbox.ps1 infra-down        # removes only the hospital-sandbox Compose project
 #>
 param(

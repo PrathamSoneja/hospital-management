@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.sandbox.runtime import REPO_ROOT, Sandbox, http_json
+from tests.sandbox.runtime import EXPIRY_DEMO_ENV, REPO_ROOT, Sandbox, http_json
 
 SANDBOX_ENV = ("TEST_POSTGRES_URL", "FIRESTORE_EMULATOR_HOST", "SANDBOX_KAFKA_BOOTSTRAP", "PUBSUB_EMULATOR_HOST")
 
@@ -27,7 +27,8 @@ def sandbox():
         postgres_url=os.environ["TEST_POSTGRES_URL"], database="hospital_sandbox_it_test",
         firestore_host=os.environ["FIRESTORE_EMULATOR_HOST"], pubsub_host=os.environ["PUBSUB_EMULATOR_HOST"],
         kafka_bootstrap=os.environ["SANDBOX_KAFKA_BOOTSTRAP"], log_dir=REPO_ROOT / ".sandbox" / "pytest",
-        allocators=2, recovery_claim_seconds=8,
+        allocators=3, recovery_claim_seconds=8,
+        allocator_overrides={2: EXPIRY_DEMO_ENV},  # allocator 2 runs the 5 s expiry-demo profile
     )
     sb.start()
     try:
@@ -48,8 +49,8 @@ class Api:
             headers["Idempotency-Key"] = key
         return headers
 
-    def create(self, admission_id, pool_id, key, allocator=0):
-        return http_json("POST", f"{self.sb.allocator_url(allocator)}/api/v1/allocations",
+    def create(self, admission_id, pool_id, key, allocator=0, query=""):
+        return http_json("POST", f"{self.sb.allocator_url(allocator)}/api/v1/allocations{query}",
                          {"admission_id": admission_id, "pool_id": pool_id}, self._headers(key), timeout=30)
 
     def get(self, allocation_id, allocator=0):
@@ -99,9 +100,11 @@ def pool(request, sandbox):
 
 
 def seed_pool(sandbox, pool_id, beds, admissions, staff=100, levels=None):
-    """admissions: list of admission IDs; levels: optional urgency per admission (default 3)."""
+    """admissions: list of admission IDs; levels: optional urgency per admission (default 3).
+
+    Returns {fixture admission ID: actual admission ID} (they differ only with the real Patient Registry)."""
     levels = levels or {}
-    sandbox.seed({
+    return sandbox.seed({
         "beds": [{"bed_id": f"{pool_id}-bed-{n:02d}", "pool_id": pool_id, "ward": f"WARD-{pool_id}"}
                  for n in range(1, beds + 1)],
         "staff_capacity": {pool_id: staff},

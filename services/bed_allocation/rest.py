@@ -2,13 +2,14 @@
 FastAPI REST router for Bed Allocation Service.
 Conforms strictly to contracts/openapi/allocation.openapi.yaml.
 """
-from typing import Optional, Union
+from typing import Annotated, Optional, Union
 from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
 from services.bed_allocation.models import (
     AllocationPage, AllocationResponse, CancelRequest,
     CreateAllocationRequest, ReleaseRequest, ReleaseResponse
 )
-from services.bed_allocation.service import BedAllocationDomainService
+from services.bed_allocation.service import BedAllocationDomainService, DemoControls
+from shared.observability.errors import AppException
 
 router = APIRouter(prefix="/api/v1")
 
@@ -45,11 +46,19 @@ def create_allocation_endpoint(
     request: Request,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
     x_request_id: Optional[str] = Header(None, alias="X-Request-ID"),
+    pause_ms: Annotated[Optional[int], Query(ge=0, le=30000, description="Demo mode only: hold the pool lease")] = None,
+    lock: Annotated[Optional[bool], Query(description="Demo mode only: false skips the pool lease (unsafe)")] = None,
     service: BedAllocationDomainService = Depends(get_service),
     response: Response = None,
 ):
     req_id = _extract_request_id(request, x_request_id)
-    result = service.create_allocation(req=req, request_id=req_id, idempotency_key=idempotency_key)
+    demo = None
+    if pause_ms is not None or lock is not None:
+        if not service.demo_mode:
+            raise AppException("DEMO_CONTROLS_DISABLED", "pause_ms and lock are accepted only in demo mode",
+                               status.HTTP_400_BAD_REQUEST)
+        demo = DemoControls(pause_ms=pause_ms or 0, lock=True if lock is None else lock)
+    result = service.create_allocation(req=req, request_id=req_id, idempotency_key=idempotency_key, demo=demo)
     _apply_pending_response(response, result)
     return result
 

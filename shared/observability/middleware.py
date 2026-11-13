@@ -2,6 +2,7 @@
 Pure ASGI observability middleware:
 - Propagates X-Request-ID without BaseHTTPMiddleware thread/deadlock issues
 - Emits Prometheus HTTP metrics
+- Logs error responses (4xx/5xx) as JSON with the request ID, so Cloud Logging correlates them
 - Mounts /healthz, /readyz, and /metrics
 """
 import time
@@ -10,15 +11,17 @@ from typing import Callable
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import PlainTextResponse
 from starlette.concurrency import run_in_threadpool
-from shared.observability.metrics import (
-    CONTENT_TYPE_LATEST, generate_latest,
-    HTTP_REQUESTS_TOTAL, HTTP_REQUEST_DURATION_SECONDS
-)
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from shared.observability.logging import setup_logger
+from shared.observability.metrics import HTTP_REQUESTS_TOTAL, HTTP_REQUEST_DURATION_SECONDS
+
+OPERATIONAL_PATHS = {"/healthz", "/readyz", "/metrics"}
 
 class ObservabilityASGIMiddleware:
     def __init__(self, app, service_name: str):
         self.app = app
         self.service_name = service_name
+        self.logger = setup_logger(service_name)
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -69,6 +72,10 @@ class ObservabilityASGIMiddleware:
                 method=method,
                 endpoint=endpoint
             ).observe(duration)
+            if status_code[0] >= 400 and endpoint not in OPERATIONAL_PATHS:
+                # Route template only: resource IDs in the path never reach the logs.
+                self.logger.warning(f"{method} {endpoint} -> {status_code[0]}", extra={
+                    "event": "http_error_response", "request_id": request_id, "duration_ms": int(duration * 1000)})
 
 def setup_observability_middleware(app: FastAPI, service_name: str, ready_check: Callable[[], bool] = lambda: True):
     # Add pure ASGI middleware

@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS  UNEXECUTED. Run an APPROVED Allocation migration by manually syncing the dedicated
            ArgoCD Application (k8s/jobs/allocation-migrate). Never kubectl apply.
-.EXAMPLE   .\scripts\cloud\Start-ApprovedMigration.ps1 -ProjectId <p> -KubeContext <ctx> -Revision 20261031_03
+.EXAMPLE   .\scripts\cloud\Start-ApprovedMigration.ps1 -ProjectId <p> -KubeContext <ctx> -Revision 20261031_04
 #>
 param([Parameter(Mandatory)][string]$ProjectId, [Parameter(Mandatory)][string]$KubeContext, [Parameter(Mandatory)][string]$Revision,
       [string]$Application = 'hospital-allocation-migrations-staging')

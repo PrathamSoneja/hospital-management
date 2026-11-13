@@ -1,7 +1,6 @@
-# Optional: scrape /metrics with Google Cloud Managed Service for Prometheus.
-# Requires managed collection on the cluster (Terraform monitoring_config currently enables
-# only SYSTEM_COMPONENTS). Add `components: [../../components/managed-prometheus]` to an
-# overlay once enabled; otherwise an in-cluster Prometheus uses the prometheus.io annotations.
+# Scrape /metrics with Google Cloud Managed Service for Prometheus (managed collection is enabled
+# in infra/terraform/modules/gke). Included by k8s/overlays/staging. Managed collection ignores
+# prometheus.io annotations; those remain for an in-cluster Prometheus.
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 resources:

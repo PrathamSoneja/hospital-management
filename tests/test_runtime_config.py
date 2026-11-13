@@ -85,3 +85,19 @@ def test_allocation_readiness_reports_unreachable_database(monkeypatch):
     with TestClient(app) as client:
         assert client.get("/healthz").status_code == 200
         assert client.get("/readyz").status_code == 503
+
+
+@pytest.mark.parametrize("env, message", [
+    ({"ENVIRONMENT": "production", "ALLOCATION_DEMO_MODE": "true"}, "not permitted in production"),
+    ({"ENVIRONMENT": "local", "LOCK_RENEWAL_ENABLED": "false"}, "only with ALLOCATION_DEMO_MODE"),
+])
+def test_demo_mode_and_disabled_renewal_are_refused_outside_explicit_demos(monkeypatch, env, message):
+    from services.bed_allocation.main import build_app
+    for name in ("FIRESTORE_EMULATOR_HOST", "PUBSUB_EMULATOR_HOST", "GOOGLE_APPLICATION_CREDENTIALS", "USE_FAKES",
+                 "ALLOCATION_DEMO_MODE", "LOCK_RENEWAL_ENABLED"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in {**CLOUD_ENV, "BED_SERVICE_ADDR": "bed:50051", "STAFF_SERVICE_ADDR": "staff:50051",
+                        "TRIAGE_SERVICE_ADDR": "triage:50051", "ENABLE_OUTBOX_WORKER": "false", **env}.items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(ConfigError, match=message):
+        build_app("postgresql+psycopg2://app@127.0.0.1:1/none")

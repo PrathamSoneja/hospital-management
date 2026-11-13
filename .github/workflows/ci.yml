@@ -20,6 +20,9 @@ jobs:
     timeout-minutes: 45
     env:
       GRAFANA_ADMIN_PASSWORD: local-ci-only  # only for `docker compose config` of the main Compose file
+      # Sandbox Prometheus/Grafana publish no host ports in CI (tests/sandbox/compose.ci.yaml); the CLI
+      # queries them by Compose service DNS, so runner ports in use cannot break infra-up.
+      SANDBOX_INTERNAL_OBSERVABILITY: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -48,7 +51,7 @@ jobs:
         run: |
           terraform fmt -check -recursive infra/terraform
           for dir in infra/terraform infra/terraform/bootstrap infra/terraform/bootstrap_k8s; do
-            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" init -backend=false -input=false -lockfile=readonly
             terraform -chdir="$dir" validate -no-color
           done
 
@@ -97,9 +100,9 @@ jobs:
           docker build -f services/patient_registry/Dockerfile -t hospital-patient-registry:ci .
           docker build -f services/lock_coordinator/Dockerfile -t hospital-lock-coordinator:ci .
           docker build -f services/notification/Dockerfile -t hospital-notification:ci .
-          # hospital_migration_empty_test is left at head by tests/test_migrations_postgres.py
+          # hospital_migration_empty_test is left at head by tests/test_migrations_postgres.py; smoke as the runtime role
           python scripts/smoke_image.py hospital-bed-allocation:ci \
-            --database-url postgresql+psycopg2://postgres:sandbox-only@127.0.0.1:45432/hospital_migration_empty_test
+            --database-url postgresql+psycopg2://allocation_app:sandbox-only@127.0.0.1:45432/hospital_migration_empty_test
           python scripts/smoke_image.py hospital-triage:ci --service triage --firestore localhost:48080 --port 18003
 
       - name: Upload test, load, and validation evidence

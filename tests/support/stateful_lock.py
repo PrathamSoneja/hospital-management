@@ -129,6 +129,10 @@ class InProcessLockClient(LockCoordinatorClient):
     def release(self, lock_id, owner_id) -> bool:
         return self.coordinator.release(lock_id, owner_id)
 
+    def renew(self, lock_id, owner_id, lease_ms):
+        success, expires_at = self.coordinator.renew(lock_id, owner_id, lease_ms)
+        return expires_at if success else None
+
     def validate(self, lock_id, owner_id, pool_id, fencing_token) -> bool:
         return self.coordinator.validate(lock_id, owner_id, pool_id, fencing_token)[0]
 

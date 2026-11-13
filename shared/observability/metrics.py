@@ -2,26 +2,7 @@
 Prometheus metrics registry with bounded cardinalities.
 Prohibits unbounded labels (e.g., patient IDs, request IDs, allocation IDs, lock IDs).
 """
-try:
-    from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
-except ImportError:
-    CONTENT_TYPE_LATEST = "text/plain; version=0.0.4; charset=utf-8"
-    def generate_latest():
-        return b"# prometheus_client not installed\n"
-
-    class _MetricStub:
-        def __init__(self, *args, **kwargs):
-            pass
-        def labels(self, *args, **kwargs):
-            return self
-        def inc(self, amount=1):
-            pass
-        def observe(self, amount):
-            pass
-        def set(self, amount):
-            pass
-
-    Counter = Histogram = Gauge = _MetricStub
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 
 # HTTP Traffic Metrics
 HTTP_REQUESTS_TOTAL = Counter(

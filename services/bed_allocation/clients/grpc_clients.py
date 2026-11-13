@@ -48,6 +48,15 @@ class GrpcLockCoordinatorClient(LockCoordinatorClient):
         except grpc.RpcError:
             return False
 
+    def renew(self, lock_id: str, owner_id: str, lease_ms: int) -> Optional[int]:
+        req = lock_pb2.RenewLockRequest(lock_id=lock_id, owner_id=owner_id, lease_ms=lease_ms)
+        try:
+            resp = self.stub.Renew(req, timeout=self.default_timeout_s)
+        except grpc.RpcError as e:
+            code = "DEADLINE_EXCEEDED" if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED else "SERVICE_UNAVAILABLE"
+            raise AppException(code, "Lock renewal outcome is unknown", status.HTTP_503_SERVICE_UNAVAILABLE, retryable=True)
+        return resp.expires_at if resp.success else None
+
     def validate(self, lock_id: str, owner_id: str, pool_id: str, fencing_token: int) -> bool:
         req = lock_pb2.ValidateLockRequest(
             lock_id=lock_id, owner_id=owner_id, pool_id=pool_id, fencing_token=fencing_token

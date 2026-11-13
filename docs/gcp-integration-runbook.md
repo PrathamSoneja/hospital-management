@@ -10,8 +10,8 @@ for pods. Never export access tokens, never create service-account key files, ne
 `GOOGLE_APPLICATION_CREDENTIALS`.
 
 Platform (fixed): GKE Standard, Artifact Registry, Cloud SQL PostgreSQL, Firestore Native, GCS,
-Pub/Sub → Eventarc → Cloud Run service, Secret Manager, Cloud Logging, Dataproc/Flink, Kafka and
-ZooKeeper self-hosted on GKE. Terraform provisions infrastructure; ArgoCD deploys applications; no
+Pub/Sub → Eventarc → Cloud Run service, Secret Manager, Cloud Logging, Dataproc/Flink, **Kafka on Confluent
+Cloud** (Terraform `modules/confluent`, decided by Ruchir), ZooKeeper on GKE for the Lock Coordinator only. Terraform provisions infrastructure; ArgoCD deploys applications; no
 application `kubectl apply`.
 
 ## 0. Owners and open conflicts (resolve before step 1)
@@ -19,16 +19,16 @@ application `kubectl apply`.
 | Area | Owner | State |
 |---|---|---|
 | Project, billing, budget, Terraform state, network, GKE, Cloud SQL, IAM, Artifact Registry, ArgoCD | Ruchir (A) | Terraform written; no state/apply verified |
-| Patient Registry, Staff Scheduler | Ruchir (A) | Images built locally; undeployed |
-| Lock Coordinator, ZooKeeper, Notification (Pub/Sub → Eventarc → Cloud Run) | Nisarg (C) | Undeployed; no endpoint |
-| Bed Registry, Kafka, Flink/Dataproc, Resource Analytics | Jay (D) | Undeployed; no endpoint |
+| Patient Registry, Staff Scheduler | Ruchir (A) | Merged; no Kubernetes manifests in `k8s/`; Staff has an open Firestore defect (`docs/precloud-status.md`) |
+| Lock Coordinator, ZooKeeper, Notification (Pub/Sub → Eventarc → Cloud Run) | Nisarg (C) | Coordinator/ZooKeeper merged (`k8s/lock-coordinator`, own ArgoCD app); Notification on an unmerged branch |
+| Bed Registry, Kafka, Flink/Dataproc, Resource Analytics | Jay (D) | Merged; `k8s/base/bed-registry-*` and `resource-analytics-*` are in no kustomization or ArgoCD app |
 | Bed Allocation, Triage, HPA/k6, Prometheus/Grafana/logging | Pratham (B) | LOCAL-VERIFIED / GENERATED-UNDEPLOYED |
 
 Conflicts found in the current Terraform (not changed by Pratham):
 
-1. **Confluent Cloud Kafka** (`modules/confluent`, `confluent_*` variables/outputs) contradicts the
-   GKE-hosted Kafka + ZooKeeper requirement. Owners: Ruchir + Jay decide; Allocation needs only an
-   in-cluster bootstrap address, topic, security protocol, and SASL secret names.
+1. **Kafka is Confluent Cloud** (decided; `modules/confluent`). It creates topics `bed-events` and `bed-stats`
+   (3 partitions each), plus service accounts and API keys for Bed Allocation (write `bed-events`), Flink (read
+   `bed-events`, write `bed-stats`) and Resource Analytics (read `bed-stats`). Section 6 lists Allocation's values.
 2. Cloud SQL passwords use the provider's write-only password arguments and are not retained in Terraform
    state. Secret Manager values are deliberately not provisioned by Terraform.
 3. Terraform creates distinct Allocation runtime and migration users. Before the first migration, a
@@ -132,12 +132,21 @@ function must accept the notification schema in `contracts/events/notification.s
 `pool_id`. Verify with a staging event (section 10). Rollback: disable the trigger; Allocation keeps
 retrying with backoff and the backlog stays visible (`outbox_pending_events`).
 
-## 6. Kafka and ZooKeeper on GKE (Jay; Nisarg for ZooKeeper used by the Coordinator)
+## 6. Kafka on Confluent Cloud (Ruchir provisions; Jay owns Flink/Analytics)
 
-Needed from the owner: in-cluster bootstrap `host:port`, topic `bed-events` (key = `pool_id`, partitions,
-replication, retention), security protocol (`SASL_SSL`/`SSL`), SASL mechanism, CA bundle mount path if
-TLS, and a dedicated Allocation principal with produce-only ACL on the topic. Consumers dedupe on
-`event_id`, detect gaps with `stream_sequence`, and must not drop lower sequences automatically.
+Allocation outbox settings (`k8s/overlays/staging/allocation.properties`):
+- `KAFKA_BOOTSTRAP_SERVERS`: Terraform output `confluent_bootstrap_endpoint`, as `host:9092`. Strip a
+  `SASL_SSL://` prefix if the output carries one.
+- `KAFKA_TOPIC_BED_EVENTS=bed-events`, `KAFKA_SECURITY_PROTOCOL=SASL_SSL`, `KAFKA_SASL_MECHANISM=PLAIN`.
+- No `KAFKA_SSL_CA_LOCATION`: Confluent uses a public CA, and the image's system CA bundle is used.
+- Credentials: `confluent_runtime_credentials.bed_allocation` (`username` = API key, `password` = secret).
+  Add them as Secret Manager versions of `kafka-allocation-sasl-username` / `-password` through the approved
+  secret workflow. The CSI mount already reads exactly these names. Never commit them or print them.
+
+Consumers dedupe on `event_id`, detect gaps with `stream_sequence`, and must not drop lower sequences
+automatically. **Open (Jay):** `services/resource_analytics/flink_job.sql` sets only `bootstrap.servers`, with
+no `security.protocol`/`sasl.*` properties, so it cannot connect to Confluent Cloud yet. The aggregator also
+counts redelivered events twice (strict xfail in `tests/test_service_boundaries.py`).
 
 ## 7. GKE add-ons and namespace (Ruchir)
 
@@ -167,9 +176,11 @@ Before wiring an endpoint, run the dependency contract checks against it (read-o
 `ACCEPTANCE_ALLOW_MUTATION=1` with designated test resources): see `docs/precloud-status.md`,
 "Replacing stand-ins". Before any ArgoCD sync, `python scripts/check_release_config.py` must exit 0.
 
-Fill `k8s/overlays/staging/allocation.properties` and `triage.properties` with the owners' in-cluster
-addresses (`LOCK_SERVICE_ADDR`, `BED_SERVICE_ADDR`, `STAFF_SERVICE_ADDR`, `PATIENT_SERVICE_URL`,
-`LOCK_COORDINATOR_ADDR`). The services refuse to start in `staging`/`production` with empty, loopback,
+`k8s/overlays/staging/allocation.properties` and `triage.properties` hold the in-cluster addresses
+(`LOCK_SERVICE_ADDR`, `BED_SERVICE_ADDR`, `STAFF_SERVICE_ADDR`, `PATIENT_SERVICE_URL`, `LOCK_COORDINATOR_ADDR`).
+Lock (`lock-coordinator-service:50051`) and Bed (`bed-registry-service:50053`) match the merged Service
+manifests and share the overlay's namespace. `staff-scheduler-service:50051` and
+`patient-registry-service:8000` have no manifest in the repository yet: confirm them with Ruchir. The services refuse to start in `staging`/`production` with empty, loopback,
 emulator, or fake settings. Contract sources: `contracts/proto/*.proto`,
 `contracts/openapi/patient-registry-admissions.openapi.yaml`.
 
@@ -191,11 +202,48 @@ emulator, or fake settings. Contract sources: `contracts/proto/*.proto`,
 
 Expected evidence (written to the ignored `evidence\`): rollouts complete, digests (not tags) in
 `images.txt`, `/healthz` 200, `/readyz` 200, missing allocation 404, Cloud Logging entries matching
-the request ID, `outbox_pending_events` near 0. HPA test: run `k6/sustained-multi-pool.js` from an
-in-cluster or private VM against the ClusterIP Services with `-WatchHpa`; expect Allocation to scale
-within 2–10 and Triage within 2–6 at ~60% CPU, and ArgoCD to stay Synced while replicas change.
-Correctness under contention: `k6/contention.js` against a **fresh** test pool with exactly 10 free beds.
-Dashboards: backlog panels/alerts use `max()` because each replica reports the same table-wide count.
+the request ID (the 404 is logged as `jsonPayload.event="http_error_response"`), `outbox_pending_events`
+near 0. Dashboards: backlog panels/alerts use `max()` because each replica reports the same table-wide count.
+
+Cluster metrics the dashboard needs (Terraform `modules/gke` enables managed Prometheus with
+`SYSTEM_COMPONENTS` only; Ruchir to decide):
+- Allocation/Triage `/metrics`: PodMonitoring from `k8s/components/managed-prometheus` (in the staging
+  overlay; ingress from `gmp-system` allowed). Lock Coordinator/ZooKeeper use `prometheus.io` annotations,
+  which managed collection ignores: Nisarg needs PodMonitoring objects (ports 8000 and 7000).
+- HPA, Deployment and restart panels: kube-state metrics (`monitoring_config.enable_components` `HPA`,
+  `DEPLOYMENT`, `POD`). CPU/memory panel: `CADVISOR`, `KUBELET`. HPA scaling itself needs only metrics-server.
+- Grafana: no staging Grafana is defined. Run the same PromQL in Cloud Monitoring (Metrics Explorer, PromQL)
+  or point a Grafana at managed Prometheus; do not report empty cluster panels as working.
+
+HPA scale-out (approved staging only; one VU set at a time). k6 runs in-cluster with the label the
+ingress policies admit:
+
+```powershell
+$ns = '<K8S_NAMESPACE>'
+kubectl -n $ns run k6 --image=grafana/k6:0.54.0 --restart=Never --labels=app.kubernetes.io/part-of=hospital-bed-management --command -- sleep 3600
+kubectl -n $ns cp k6 k6:/tmp/k6
+# Terminal 2: .\scripts\cloud\Invoke-PostDeployChecks.ps1 -ProjectId <PROJECT_ID> -KubeContext <KUBE_CONTEXT> -Namespace $ns -WatchHpa
+kubectl -n $ns exec k6 -- k6 run -e ALLOCATION_URLS=http://bed-allocation-service:8000 -e TRIAGE_URL=http://triage-service:8000 `
+  -e POOL_IDS=<TEST_POOLS> -e ADMISSIONS_PER_POOL=<N> -e VUS=40 -e RAMP=1m -e DURATION=10m -e P95_THRESHOLD_MS=3000 /tmp/k6/sustained-multi-pool.js
+kubectl -n $ns top pods -l 'app in (bed-allocation-service,triage-service)'
+kubectl -n $ns describe hpa bed-allocation-hpa triage-hpa      # "New size" events
+argocd app get hospital-allocation-triage-staging               # stays Synced while replicas change
+kubectl -n $ns delete pod k6
+```
+
+Pass criteria: Allocation replicas rise above 2 (max 10) and Triage above 2 (max 6) with CPU near the 60%
+target; k6 thresholds pass (p95 < 3 s, checks > 99%); 5xx stays below 1%. Correctness: `k6/contention.js`
+against a **fresh** test pool with exactly 10 free beds and >= 50 test admissions must settle to
+10 ALLOCATED / 40 WAITLISTED with 10 distinct beds and no duplicate ownership. Cloud Logging:
+
+```powershell
+gcloud logging read 'resource.type="k8s_container" AND resource.labels.namespace_name="<K8S_NAMESPACE>" AND jsonPayload.event="allocation_settled"' --project <PROJECT_ID> --freshness 30m --limit 20 --format json
+gcloud logging read 'resource.type="k8s_container" AND jsonPayload.request_id="<REQUEST_ID_FROM_K6>"' --project <PROJECT_ID> --freshness 30m --format json
+```
+
+The second query should return the Allocation, Triage, Bed Registry and Patient Registry lines for one
+request. The Lock Coordinator receives no request ID (no field in `lock.proto`). Record GKE scaling and
+Cloud Logging as **NOT RUN** until these outputs are observed.
 
 ## 12. Evidence and cost
 
@@ -207,21 +255,22 @@ scale node pool/Dataproc down or tear down only with approval.
 
 | Variable | Source | Consumer | Secret? |
 |---|---|---|---|
-| `GCP_PROJECT_ID`, `PUBSUB_PROJECT_ID`, `FIRESTORE_PROJECT_ID` | Terraform `project_id` | Allocation, Triage | No |
-| `GCP_REGION` / image registry host | Terraform `region`, output `artifact_registry_repository` | Images, overlay | No |
-| `PLACEHOLDER_K8S_NAMESPACE` | Terraform `kubernetes_namespace` | Overlay, ArgoCD | No |
+| `GCP_PROJECT_ID`, `PUBSUB_PROJECT_ID`, `FIRESTORE_PROJECT_ID` | Terraform `project_id` (**not yet known**) | Allocation, Triage | No |
+| `GCP_REGION` / image registry host | `asia-south1` / `asia-south1-docker.pkg.dev/<PROJECT_ID>/hospital-repo` (gitops/README.md, ci.yml) | Images, overlay | No |
+| `PLACEHOLDER_K8S_NAMESPACE` | `hospital-system` (Terraform `kubernetes_namespace`; all `gke` overlays). Allocation/Triage must share it, so short Service names resolve | Overlay, ArgoCD | No |
 | `PLACEHOLDER_NAME_PREFIX` | Terraform `name_prefix` | KSA annotations | No |
 | `CLOUD_SQL_INSTANCE_CONNECTION_NAME` | Output `cloudsql_connection_name` | Proxy sidecar, migration Job | No |
 | `DATABASE_URL` (runtime user) | Secret Manager `allocation-database-url` | Allocation (`DATABASE_URL_FILE`) | **Yes** |
 | Migration DB URL | Secret Manager `allocation-migration-database-url` | Migration Job only | **Yes** |
-| `LOCK_SERVICE_ADDR`, `LOCK_COORDINATOR_ADDR` | Nisarg | Allocation, Triage | No |
-| `BED_SERVICE_ADDR` | Jay | Allocation | No |
-| `STAFF_SERVICE_ADDR`, `PATIENT_SERVICE_URL` | Ruchir | Allocation | No |
-| `PUBSUB_TOPIC_NOTIFICATIONS` | Nisarg / Terraform | Allocation outbox | No |
-| `KAFKA_BOOTSTRAP_SERVERS`, `KAFKA_TOPIC_BED_EVENTS`, `KAFKA_SECURITY_PROTOCOL`, `KAFKA_SASL_MECHANISM`, `KAFKA_SSL_CA_LOCATION` | Jay | Allocation outbox | No |
-| `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD` | Secret Manager `kafka-allocation-sasl-*` | Allocation (`*_FILE`) | **Yes** |
+| `LOCK_SERVICE_ADDR`, `LOCK_COORDINATOR_ADDR` | `lock-coordinator-service:50051` (manifest) | Allocation, Triage | No |
+| `BED_SERVICE_ADDR` | `bed-registry-service:50053` (manifest; Bed Registry not yet deployable) | Allocation | No |
+| `STAFF_SERVICE_ADDR`, `PATIENT_SERVICE_URL` | `staff-scheduler-service:50051`, `http://patient-registry-service:8000/api/v1` (manifests in `k8s/staff-scheduler`, `k8s/patient-registry`) | Allocation | No |
+| `PUBSUB_TOPIC_NOTIFICATIONS` | `bed-notifications` (Terraform `modules/notifications`) | Allocation outbox | No |
+| `KAFKA_BOOTSTRAP_SERVERS`, `KAFKA_TOPIC_BED_EVENTS`, `KAFKA_SECURITY_PROTOCOL`, `KAFKA_SASL_MECHANISM` | Output `confluent_bootstrap_endpoint` (`host:9092`); `bed-events`; `SASL_SSL`; `PLAIN` (section 6) | Allocation outbox | No |
+| `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD` | `confluent_runtime_credentials.bed_allocation` → Secret Manager `kafka-allocation-sasl-username` / `-password` | Allocation (`*_FILE`) | **Yes** |
 | `RPC_TIMEOUT_MS`, `LOCK_WAIT_TIMEOUT_MS`, `LOCK_LEASE_MS`, `OUTBOX_*` | Repository defaults (bounded) | Allocation | No |
-| Git repo URL/branch, ArgoCD project | Ruchir | ArgoCD Applications | No |
+| `ALLOCATION_DEMO_MODE`, `LOCK_RENEWAL_ENABLED` | Leave unset in staging/production (defaults: demo off, renewal on); demo profiles only, refused in production | Allocation | No |
+| Git repo URL/branch, ArgoCD project | Ruchir. `gitops/` tracks `main`, but the repository's default branch is `master` (open) | ArgoCD Applications | No |
 | `<BILLING_ACCOUNT_ID>`, `<BUDGET_AMOUNT>` | Project owner | Budget | No |
 
 ## Mock → real replacement checklist
@@ -235,5 +284,5 @@ scale node pool/Dataproc down or tear down only with approval.
 | In-process Triage (`DirectTriageClient`) in load target | Triage gRPC service | Allocation `TRIAGE_SERVICE_ADDR` | Enqueue/Remove ledger replay in staging |
 | Firestore emulator | Firestore Native | `FIRESTORE_EMULATOR_HOST` absent (rejected in cloud) | `/readyz`; index list |
 | Docker PostgreSQL | Cloud SQL via proxy | Secret-mounted `DATABASE_URL_FILE` | `/readyz`; migration head |
-| `RecordingPublisher` / client doubles | Pub/Sub + Kafka on GKE | `ENABLE_OUTBOX_WORKER=true` with broker settings | Section 10 event tests; backlog drains |
+| `RecordingPublisher` / client doubles | Pub/Sub + Kafka on Confluent Cloud | `ENABLE_OUTBOX_WORKER=true` with broker settings | Section 10 event tests; backlog drains |
 | Local Prometheus/Grafana (Compose) | Prometheus scraping pods or Managed Prometheus | Scrape config/PodMonitoring applied by ArgoCD | Targets UP; dashboard queries return data |

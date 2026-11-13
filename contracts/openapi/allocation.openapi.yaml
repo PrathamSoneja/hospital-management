@@ -18,6 +18,20 @@ paths:
           required: false
           schema:
             type: string
+        - name: pause_ms
+          in: query
+          required: false
+          description: Demo mode only (ALLOCATION_DEMO_MODE=true); otherwise 400 DEMO_CONTROLS_DISABLED. Holds the pool lease this long after acquiring it.
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 30000
+        - name: lock
+          in: query
+          required: false
+          description: Demo mode only. false skips the pool lease (explicitly unsafe); fenced downstream services are expected to refuse the resulting mutations.
+          schema:
+            type: boolean
       requestBody:
         required: true
         content:

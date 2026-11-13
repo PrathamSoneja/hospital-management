@@ -237,3 +237,20 @@ def test_grpc_servicer(domain_service):
     rem_req = triage_pb2.RemoveWaitlistEntryRequest(context=remove_ctx, allocation_id="alloc-grpc", reason="promoted")
     rem_resp = servicer.RemoveEntry(rem_req, MockContext())
     assert rem_resp.success
+
+
+def test_exhausted_firestore_contention_is_a_retryable_503_not_internal():
+    """Seen in the real-services load run: emulator lock timeouts exhausted firestore.transactional's
+    attempts (ValueError from Aborted) and Triage answered gRPC INTERNAL."""
+    from google.api_core.exceptions import Aborted
+    from services.triage.repository.firestore import FirestoreTriageRepository
+    from shared.observability.errors import AppException
+
+    def exhausted():
+        raise ValueError("Failed to commit transaction in 5 attempts.") from Aborted("Transaction lock timeout.")
+
+    with pytest.raises(AppException) as raised:
+        FirestoreTriageRepository._dependency_call(exhausted)
+    assert (raised.value.status_code, raised.value.retryable) == (503, True)
+    with pytest.raises(ValueError):  # other ValueErrors are not masked
+        FirestoreTriageRepository._dependency_call(lambda: (_ for _ in ()).throw(ValueError("bad input")))

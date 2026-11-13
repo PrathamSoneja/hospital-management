@@ -49,6 +49,8 @@ services:
   zookeeper:
     image: zookeeper:3.9
     ports: ["42181:2181"]
+    environment:  # Prometheus metrics on 7000, as in k8s/lock-coordinator/base/zookeeper.yaml
+      ZOO_CFG_EXTRA: "metricsProvider.className=org.apache.zookeeper.metrics.prometheus.PrometheusMetricsProvider metricsProvider.httpPort=7000"
     tmpfs: [/data, /datalog]
 
   prometheus:

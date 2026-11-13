@@ -1,0 +1,13 @@
+diff --git a/services/staff_scheduler/repository/firestore.py b/services/staff_scheduler/repository/firestore.py
+index 0683700..3a576d4 100644
+--- a/services/staff_scheduler/repository/firestore.py
++++ b/services/staff_scheduler/repository/firestore.py
+@@ -184,7 +184,7 @@ class FirestoreStaffRepository:
+         if transaction is None:
+             shifts = list(staff_ref.collection("shifts").stream(timeout=1.0))
+         else:
+-            shifts = list(transaction.get(staff_ref.collection("shifts")))
++            shifts = list(transaction.get(staff_ref.collection("shifts").select(["active", "starts_at", "ends_at"])))
+         for snapshot in shifts:
+             shift = snapshot.to_dict()
+             starts_at = shift.get("starts_at")

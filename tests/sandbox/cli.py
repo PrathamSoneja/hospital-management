@@ -3,7 +3,7 @@ Local sandbox command line (TEST-ONLY). Used directly, by scripts/local/Sandbox.
 
     python -m tests.sandbox.cli infra-up        # disposable Postgres, Firestore, Pub/Sub, Kafka (+Prometheus/Grafana)
     python -m tests.sandbox.cli verify          # full pytest suite against the sandbox; skips fail
-    python -m tests.sandbox.cli up              # start deps + Triage + 2 allocators, seed, run until Ctrl+C
+    python -m tests.sandbox.cli up              # real Lock+Bed, stand-ins, Triage, 2 allocators; seed; Ctrl+C
     python -m tests.sandbox.cli load            # reset -> seed -> readiness -> k6 -> audit -> evidence
     python -m tests.sandbox.cli infra-down      # remove only the hospital-sandbox Compose project
 
@@ -23,12 +23,22 @@ import urllib.parse
 from pathlib import Path
 
 from tests.sandbox.audit import audit
-from tests.sandbox.runtime import REPO_ROOT, Sandbox, fixture_contention, fixture_multipool, http_json, wait_until
+from tests.sandbox.runtime import (DEMO_ENV, EXPIRY_DEMO_ENV, REPO_ROOT, Sandbox, fixture_contention, fixture_multipool,
+                                   http_json, wait_until)
 
-COMPOSE = ["docker", "compose", "-f", str(REPO_ROOT / "tests" / "sandbox" / "compose.yaml")]
+# CI sets SANDBOX_INTERNAL_OBSERVABILITY=1: Prometheus/Grafana publish no host ports (compose.ci.yaml) and are
+# queried by Compose service DNS from inside the network; locally they stay on localhost:49090/43000.
+INTERNAL_OBSERVABILITY = os.environ.get("SANDBOX_INTERNAL_OBSERVABILITY") == "1"
+COMPOSE = ["docker", "compose", "-f", str(REPO_ROOT / "tests" / "sandbox" / "compose.yaml")] + (
+    ["-f", str(REPO_ROOT / "tests" / "sandbox" / "compose.ci.yaml")] if INTERNAL_OBSERVABILITY else [])
 K6_IMAGE = "grafana/k6:0.54.0"
 PORTS = {"deps_grpc": 47051, "deps_http": 47080, "triage_rest": 47101, "triage_grpc": 47151,
-         "allocator_0": 47201, "allocator_1": 47202}
+         "allocator_0": 47201, "allocator_1": 47202,
+         "lock_rest": 47301, "lock_grpc": 47351, "bed_rest": 47401, "bed_grpc": 47451}
+# Real Lock Coordinator (ZooKeeper) and Bed Registry. k6 fixtures address admissions by fixed ID, so
+# Patient (server-assigned IDs) and Staff (documented defect) stay stand-ins here;
+# tests/integration/test_actual_services.py covers the real Patient and Staff paths.
+LOAD_ACTUAL = ("lock", "bed")
 ENV = {  # sandbox Compose endpoints (tests/sandbox/compose.yaml)
     "TEST_POSTGRES_URL": "postgresql+psycopg2://postgres:sandbox-only@127.0.0.1:45432/hospital_allocation_unit_test",
     "FIRESTORE_EMULATOR_HOST": "localhost:48080",
@@ -36,8 +46,24 @@ ENV = {  # sandbox Compose endpoints (tests/sandbox/compose.yaml)
     "SANDBOX_KAFKA_BOOTSTRAP": "localhost:49092",
     "ZK_TEST_HOSTS": "localhost:42181",
 }
-PROMETHEUS = "http://localhost:49090"
-GRAFANA = "http://localhost:43000"
+PROMETHEUS = "http://prometheus:9090" if INTERNAL_OBSERVABILITY else "http://localhost:49090"
+GRAFANA = "http://grafana:3000" if INTERNAL_OBSERVABILITY else "http://localhost:43000"
+
+
+def observability_get(url: str, headers=None):
+    """GET Prometheus/Grafana: from the host locally, or by service DNS inside the Compose network in CI."""
+    if not INTERNAL_OBSERVABILITY:
+        return http_json("GET", url, headers=headers)
+    args = COMPOSE + ["exec", "-T", "prometheus", "wget", "-q", "-O", "-", "-T", "10"]
+    for key, value in (headers or {}).items():
+        args += ["--header", f"{key}: {value}"]
+    result = subprocess.run(args + [url], cwd=REPO_ROOT, capture_output=True, text=True)
+    if result.returncode != 0:  # busybox wget gives no status code; any HTTP error or network failure lands here
+        return 0, None, {}
+    try:
+        return 200, json.loads(result.stdout), {}
+    except ValueError:
+        return 200, result.stdout, {}
 
 
 def run(command, check=True, **kwargs):
@@ -82,9 +108,11 @@ def sandbox_env():
     os.environ.update(ENV)
 
 
-def new_sandbox(log_dir: Path) -> Sandbox:
+def new_sandbox(log_dir: Path, profile_env: dict | None = None, actual: tuple = LOAD_ACTUAL) -> Sandbox:
     sandbox_env()
-    return Sandbox(postgres_url=ENV["TEST_POSTGRES_URL"], database="hospital_sandbox_load_test",
+    return Sandbox(allocator_overrides={i: dict(profile_env or {}) for i in range(2)},
+                   actual=actual, zk_hosts=ENV["ZK_TEST_HOSTS"],
+                   postgres_url=ENV["TEST_POSTGRES_URL"], database="hospital_sandbox_load_test",
                    firestore_host=ENV["FIRESTORE_EMULATOR_HOST"], pubsub_host=ENV["PUBSUB_EMULATOR_HOST"],
                    kafka_bootstrap=ENV["SANDBOX_KAFKA_BOOTSTRAP"], log_dir=log_dir, allocators=2,
                    bind_host="0.0.0.0", ports=dict(PORTS), recovery_claim_seconds=15)
@@ -99,8 +127,10 @@ def verify(extra_args):
                check=False, env=env).returncode
 
 
-def up(fixture: str):
-    sandbox = new_sandbox(REPO_ROOT / ".sandbox" / "interactive")
+def up(fixture: str, profile: str, deps: str):
+    profile_env = {"normal": None, "demo": DEMO_ENV, "expiry-demo": EXPIRY_DEMO_ENV}[profile]
+    sandbox = new_sandbox(REPO_ROOT / ".sandbox" / "interactive", profile_env,
+                          LOAD_ACTUAL if deps == "actual" else ())
     sandbox.start()
     try:
         sandbox.seed(fixture_contention() if fixture == "contention" else fixture_multipool(admissions_per_pool=200))
@@ -139,25 +169,25 @@ def _settle(sandbox: Sandbox, pools, timeout=180):
 def _observability(sandbox: Sandbox, out: Path) -> dict:
     auth = {"Authorization": "Basic " + base64.b64encode(b"admin:sandbox-only").decode()}
     result = {}
-    status, targets, _ = http_json("GET", f"{PROMETHEUS}/api/v1/targets")
+    status, targets, _ = observability_get(f"{PROMETHEUS}/api/v1/targets")
     result["prometheus_targets"] = [{"job": t["labels"]["job"], "instance": t["labels"]["instance"], "health": t["health"]}
                                     for t in (targets or {}).get("data", {}).get("activeTargets", [])]
-    rules = http_json("GET", f"{PROMETHEUS}/api/v1/rules")[1] or {}
+    rules = observability_get(f"{PROMETHEUS}/api/v1/rules")[1] or {}
     result["prometheus_rules"] = [r["name"] for g in rules.get("data", {}).get("groups", []) for r in g["rules"]]
     dashboard = json.loads((REPO_ROOT / "monitoring" / "dashboards" / "hospital_overview.json").read_text())
     queries = {}
     for panel in dashboard["panels"]:
         for target in panel.get("targets", []):
             expr = target["expr"]
-            body = http_json("GET", f"{PROMETHEUS}/api/v1/query?query={urllib.parse.quote(expr)}")[1] or {}
+            body = observability_get(f"{PROMETHEUS}/api/v1/query?query={urllib.parse.quote(expr)}")[1] or {}
             queries[expr] = {"panel": panel["title"], "series": len(body.get("data", {}).get("result", []))}
     result["dashboard_queries"] = queries
-    endpoints = http_json("GET", f"{PROMETHEUS}/api/v1/label/endpoint/values")[1] or {}
+    endpoints = observability_get(f"{PROMETHEUS}/api/v1/label/endpoint/values")[1] or {}
     result["endpoint_label_values"] = endpoints.get("data", [])
-    result["grafana_health"] = http_json("GET", f"{GRAFANA}/api/health")[0]
-    result["grafana_datasources"] = [d["uid"] for d in (http_json("GET", f"{GRAFANA}/api/datasources", headers=auth)[1] or [])]
-    result["grafana_dashboards"] = [d["title"] for d in (http_json("GET", f"{GRAFANA}/api/search?type=dash-db", headers=auth)[1] or [])]
-    proxied = http_json("GET", f"{GRAFANA}/api/datasources/proxy/uid/prometheus/api/v1/query?query=up", headers=auth)
+    result["grafana_health"] = observability_get(f"{GRAFANA}/api/health")[0]
+    result["grafana_datasources"] = [d["uid"] for d in (observability_get(f"{GRAFANA}/api/datasources", headers=auth)[1] or [])]
+    result["grafana_dashboards"] = [d["title"] for d in (observability_get(f"{GRAFANA}/api/search?type=dash-db", headers=auth)[1] or [])]
+    proxied = observability_get(f"{GRAFANA}/api/datasources/proxy/uid/prometheus/api/v1/query?query=up", headers=auth)
     result["grafana_to_prometheus_up_series"] = len(((proxied[1] or {}).get("data") or {}).get("result", []))
     # Structured logs: JSON lines carrying the k6 request IDs.
     correlated = 0
@@ -218,7 +248,7 @@ def load(sustained_duration: str, vus: int) -> int:
         time.sleep(12)  # at least two Prometheus scrapes after the run
         manifest["observability"] = _observability(sandbox, out)
         (out / "dependencies-state-summary.json").write_text(json.dumps(
-            {k: v for k, v in sandbox.dependency_state().items() if k in ("calls", "fence_rejections", "lock_acquisitions")}, indent=2))
+            {k: v for k, v in sandbox.dependency_state().items() if k in ("calls", "fence_rejections")}, indent=2))
     except Exception as error:
         failures.append(f"procedure error: {error!r}")
     finally:
@@ -226,7 +256,8 @@ def load(sustained_duration: str, vus: int) -> int:
         manifest["finished_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
         manifest["failures"] = failures
         manifest["limitations"] = [
-            "Lock/Bed/Staff/Patient are shared test stand-ins (tests/support/sandbox_dependencies.py), not teammate services.",
+            "Lock Coordinator (local ZooKeeper) and Bed Registry are the real services; Staff and Patient are "
+            "stand-ins (tests/support/sandbox_dependencies.py) fenced against the real Coordinator.",
             "Single machine, two allocator processes: not GKE, HPA, or distributed-lock evidence.",
             "Kafka and Pub/Sub are local emulators/containers, not the production brokers.",
         ]
@@ -247,6 +278,10 @@ def main():
     verify_parser.add_argument("pytest_args", nargs="*")
     up_parser = sub.add_parser("up")
     up_parser.add_argument("--fixture", choices=["contention", "multipool"], default="contention")
+    up_parser.add_argument("--profile", choices=["normal", "demo", "expiry-demo"], default="normal",
+                           help="demo: accept pause_ms/lock=false; expiry-demo: also 5 s lease without renewal")
+    up_parser.add_argument("--deps", choices=["actual", "standins"], default="actual",
+                           help="actual: real Lock Coordinator and Bed Registry (needs infra-up ZooKeeper)")
     load_parser = sub.add_parser("load")
     load_parser.add_argument("--duration", default="2m")
     load_parser.add_argument("--vus", type=int, default=20)
@@ -260,7 +295,7 @@ def main():
     elif args.command == "verify":
         sys.exit(verify(args.pytest_args))
     elif args.command == "up":
-        up(args.fixture)
+        up(args.fixture, args.profile, args.deps)
     elif args.command == "load":
         sys.exit(load(args.duration, args.vus))
 

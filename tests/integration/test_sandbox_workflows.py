@@ -6,8 +6,10 @@ sandbox_dependencies.py); results show Allocation/Triage logic across processes,
 ZooKeeper or teammate-service correctness. The documented race between external lease
 validation and the Firestore commit is not addressed by these tests.
 """
+import http.client
 import threading
 import time
+import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
 import grpc
@@ -80,7 +82,8 @@ def test_idempotent_replay_conflict_and_concurrent_retries(sandbox, api, pool):
 
     with ThreadPoolExecutor(12) as executor:  # one key, concurrent across both allocators
         results = list(executor.map(lambda i: api.create(a2, pool, f"{pool}-race", allocator=i % 2), range(12)))
-    assert {r[0] for r in results} <= {201, 202}
+    unexpected = [(r[0], r[1]) for r in results if r[0] not in (201, 202)]
+    assert not unexpected, f"same key and payload must replay, got: {unexpected}"
     assert len({r[1]["allocation_id"] for r in results}) == 1
 
     with ThreadPoolExecutor(8) as executor:  # different keys, same admission: one active allocation only
@@ -131,11 +134,24 @@ def test_allocator_crash_mid_workflow_is_recovered_by_peer_and_restart(sandbox, 
     seed_pool(sandbox, pool, beds=1, admissions=[admission])
     sandbox.fault("AssignStaff", "delay", delay_seconds=4)
     result = {}
-    worker = threading.Thread(target=lambda: result.setdefault("r", api.create(admission, pool, f"{pool}-k", allocator=0)))
+
+    def in_flight_request():
+        try:
+            result["response"] = api.create(admission, pool, f"{pool}-k", allocator=0)
+        except (ConnectionError, urllib.error.URLError, http.client.HTTPException) as error:
+            result["connection_lost"] = error  # expected: the process serving it is killed mid-request
+        except BaseException as error:  # anything else is a real failure; re-raised below
+            result["unexpected"] = error
+
+    worker = threading.Thread(target=in_flight_request)
     worker.start()
     time.sleep(2)  # allocator-0 holds the claim and is inside AssignStaff
     sandbox.restart_allocator(0, graceful=False)  # hard kill (crash), then start a fresh process
     worker.join(30)
+    assert not worker.is_alive()
+    if "unexpected" in result:
+        raise result["unexpected"]
+    assert "connection_lost" in result or "response" in result
     row = _rows(sandbox, "SELECT allocation_id FROM allocations WHERE admission_id = :a", a=admission)[0]
     # The claim lapses (8 s), then a recovery worker (either process) resumes with the same operation IDs.
     settled = api.wait_status(row["allocation_id"], {"ALLOCATED"}, timeout=90)

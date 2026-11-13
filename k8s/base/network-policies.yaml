@@ -1,4 +1,4 @@
-# Private internals: ingress only from this system's pods and the monitoring namespace.
+# Private internals: ingress only from this system's pods and the monitoring / gmp-system namespaces.
 # Enforcement requires GKE Dataplane V2 / network policy enforcement (cluster setting owned by
 # Terraform); without it these objects are accepted but not enforced. Egress stays open for DNS,
 # the GKE metadata server (Workload Identity), Cloud SQL proxy, Firestore, Pub/Sub, and Kafka.
@@ -19,6 +19,9 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: monitoring
+        - namespaceSelector:  # GKE Managed Prometheus collectors (PodMonitoring)
+            matchLabels:
+              kubernetes.io/metadata.name: gmp-system
       ports:
         - port: 8000
           protocol: TCP
@@ -40,6 +43,9 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: monitoring
+        - namespaceSelector:  # GKE Managed Prometheus collectors (PodMonitoring)
+            matchLabels:
+              kubernetes.io/metadata.name: gmp-system
       ports:
         - port: 8000
           protocol: TCP

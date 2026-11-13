@@ -15,3 +15,16 @@ scrape_configs:
     static_configs:
       - targets: ["host.docker.internal:47201", "host.docker.internal:47202"]
         labels: {service: bed-allocation-service}
+  # Real teammate services when the CLI runs them (load / up --deps actual); down otherwise.
+  - job_name: lock-coordinator
+    static_configs:
+      - targets: ["host.docker.internal:47301"]
+        labels: {service: lock-coordinator}
+  - job_name: bed-registry
+    static_configs:
+      - targets: ["host.docker.internal:47401"]
+        labels: {service: bed-registry-service}
+  - job_name: zookeeper
+    static_configs:
+      - targets: ["zookeeper:7000"]
+        labels: {service: zookeeper}

@@ -68,6 +68,13 @@ class FakeLockCoordinatorClient(LockCoordinatorClient):
             return True
         return False
 
+    def renew(self, lock_id: str, owner_id: str, lease_ms: int):
+        lease = self.active_locks.get(lock_id)
+        if not lease or lease.owner_id != owner_id:
+            return None
+        lease.expires_at = int((time.time() + lease_ms / 1000.0) * 1000)
+        return lease.expires_at
+
     def validate(self, lock_id: str, owner_id: str, pool_id: str, fencing_token: int) -> bool:
         lease = self.active_locks.get(lock_id)
         if not lease:

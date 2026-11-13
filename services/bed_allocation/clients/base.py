@@ -71,6 +71,11 @@ class LockCoordinatorClient(ABC):
         pass
 
     @abstractmethod
+    def renew(self, lock_id: str, owner_id: str, lease_ms: int) -> Optional[int]:
+        """New expires_at (ms since epoch) when renewed, None when ownership was refused; raises when unreachable."""
+        pass
+
+    @abstractmethod
     def validate(self, lock_id: str, owner_id: str, pool_id: str, fencing_token: int) -> bool:
         pass
 

@@ -21,6 +21,9 @@ const poolId = __ENV.POOL_ID || '';
 const admissions = Number(__ENV.ADMISSIONS || 50);
 const expectAllocated = Number(__ENV.EXPECT_ALLOCATED || 10);
 const prefix = __ENV.ADMISSION_PREFIX || 'adm-k6';
+// Real Patient Registry assigns admission IDs: ADMISSIONS_FILE is JSON {pool_id: [admission_id, ...]}
+// (scripts/seed_load_fixture.py). Without it, IDs are `${prefix}-${n}` (sandbox stand-in).
+const seededIds = __ENV.ADMISSIONS_FILE ? JSON.parse(open(__ENV.ADMISSIONS_FILE))[poolId] : null;
 const runId = __ENV.RUN_ID || `${Date.now()}`;
 const settleSeconds = Number(__ENV.SETTLE_SECONDS || 120);
 
@@ -50,7 +53,7 @@ function headers(requestId, key) {
 
 export default function () {
   const requestId = `k6-${runId}-${__VU}-${__ITER}`;
-  const admissionId = mode === 'distinct' ? `${prefix}-${__VU}` : __ENV.ADMISSION_ID;
+  const admissionId = mode === 'distinct' ? (seededIds ? seededIds[__VU - 1] : `${prefix}-${__VU}`) : __ENV.ADMISSION_ID;
   const key = mode === 'distinct' ? `k6-${runId}-${admissionId}` : `k6-${runId}-${requestId}`;
   const target = baseUrls[(__VU + __ITER) % baseUrls.length];
   const response = http.post(`${target}/api/v1/allocations`,
@@ -88,7 +91,8 @@ export function teardown() {
   let rows = null;
   while (Date.now() < deadline) {
     const all = listPool();
-    rows = all && all.filter((row) => mode !== 'distinct' || row.admission_id.startsWith(`${prefix}-`));
+    rows = all && all.filter((row) => mode !== 'distinct'
+      || (seededIds ? seededIds.includes(row.admission_id) : row.admission_id.startsWith(`${prefix}-`)));
     if (rows && rows.every((row) => ['ALLOCATED', 'WAITLISTED', 'CANCELLED', 'RELEASED', 'FAILED'].includes(row.status))) {
       break;
     }

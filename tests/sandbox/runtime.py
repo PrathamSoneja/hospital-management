@@ -20,6 +20,7 @@ import urllib.error
 import urllib.request
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -27,6 +28,13 @@ from sqlalchemy import create_engine, text
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOOPBACK = {"localhost", "127.0.0.1", "::1"}
+
+# Allocator environment profiles. The staging lease stays 10 s with renewal; demos opt in explicitly.
+DEMO_ENV = {"ALLOCATION_DEMO_MODE": "true"}
+EXPIRY_DEMO_ENV = {**DEMO_ENV, "LOCK_LEASE_MS": "5000", "LOCK_RENEWAL_ENABLED": "false"}
+
+# Dependencies that can run as the teammates' merged services instead of the stand-ins.
+ACTUAL_SERVICES = ("lock", "bed", "patient", "staff")
 
 
 def free_port() -> int:
@@ -101,6 +109,47 @@ def with_database(url: str, database: str) -> str:
     return urlunsplit(parts._replace(path=f"/{database}"))
 
 
+# Local mirrors of the Cloud SQL users created by Terraform (modules/cloudsql): migrations run as the
+# schema-owning migrator, the service runs as the DML-only app user. Passwords are sandbox-only.
+MIGRATOR_ROLE, APP_ROLE, SANDBOX_ROLE_PASSWORD = "allocation_migrator", "allocation_app", "sandbox-only"
+
+
+def with_role(url: str, role: str) -> str:
+    parts = urlsplit(url)
+    host = parts.netloc.rsplit("@", 1)[-1]
+    return urlunsplit(parts._replace(netloc=f"{role}:{SANDBOX_ROLE_PASSWORD}@{host}"))
+
+
+def prepare_allocation_database(admin_url: str, database: str) -> tuple[str, str]:
+    """Drop/recreate a disposable *_test database the way the runbook prepares Cloud SQL.
+
+    Ensures the two login roles exist on the local server, recreates the database owned by the
+    admin, and grants only USAGE, CREATE on schema public to the migrator. Returns
+    (migrator_url, app_url); grants for the app user come from migration 20261031_04.
+    """
+    assert_disposable_database_url(with_database(admin_url, database))
+    admin = create_engine(with_database(admin_url, "postgres"), isolation_level="AUTOCOMMIT")
+    try:
+        with admin.connect() as connection:
+            for role in (MIGRATOR_ROLE, APP_ROLE):
+                if not connection.execute(text("SELECT 1 FROM pg_roles WHERE rolname = :r"), {"r": role}).scalar():
+                    connection.execute(text(f"CREATE ROLE {role} LOGIN PASSWORD '{SANDBOX_ROLE_PASSWORD}'"))
+            connection.execute(text("SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                                    "WHERE datname = :db AND pid <> pg_backend_pid()"), {"db": database})
+            connection.execute(text(f'DROP DATABASE IF EXISTS "{database}"'))
+            connection.execute(text(f'CREATE DATABASE "{database}"'))
+    finally:
+        admin.dispose()
+    owner = create_engine(with_database(admin_url, database), isolation_level="AUTOCOMMIT")
+    try:
+        with owner.connect() as connection:
+            connection.execute(text(f"GRANT USAGE, CREATE ON SCHEMA public TO {MIGRATOR_ROLE}"))
+    finally:
+        owner.dispose()
+    target = with_database(admin_url, database)
+    return with_role(target, MIGRATOR_ROLE), with_role(target, APP_ROLE)
+
+
 @dataclass
 class ManagedProcess:
     name: str
@@ -161,17 +210,30 @@ class Sandbox:
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
     outbox_overrides: dict = field(default_factory=dict)
     recovery_claim_seconds: int = 60
+    allocator_overrides: dict = field(default_factory=dict)  # allocator index -> extra environment
+    actual: tuple = ()                # subset of ACTUAL_SERVICES run as real services; the rest stay stand-ins
+    zk_hosts: str | None = None       # required when "lock" is actual
 
     def __post_init__(self):
         if not self.database.endswith("_test"):
             raise ValueError("sandbox database must end in _test")
         self.log_dir = Path(self.log_dir)
-        self.database_url = with_database(self.postgres_url, self.database)
+        # Processes and audits use the restricted runtime role; migrations use the migrator role.
+        self.database_url = with_role(with_database(self.postgres_url, self.database), APP_ROLE)
+        self.migrator_url = with_role(with_database(self.postgres_url, self.database), MIGRATOR_ROLE)
         assert_disposable_database_url(self.database_url)
         for key in ("deps_grpc", "deps_http", "triage_rest", "triage_grpc"):
             self.ports.setdefault(key, free_port())
         for index in range(self.allocators):
             self.ports.setdefault(f"allocator_{index}", free_port())
+        self.seeded_beds: list[str] = []  # bed IDs seeded into the real Bed Registry
+        unknown = set(self.actual) - set(ACTUAL_SERVICES)
+        if unknown or ("lock" in self.actual and not self.zk_hosts):
+            raise ValueError(f"bad actual services {sorted(unknown)} or missing zk_hosts")
+        for name in self.actual:
+            self.ports.setdefault(f"{name}_rest", free_port())
+            if name != "patient":
+                self.ports.setdefault(f"{name}_grpc", free_port())
         self.topics = {"kafka": f"bed-events-{self.run_id}", "pubsub": f"bed-notifications-{self.run_id}"}
         self.processes: dict[str, ManagedProcess] = {}
 
@@ -187,22 +249,22 @@ class Sandbox:
     def allocator_url(self, index: int = 0):
         return f"http://127.0.0.1:{self.ports[f'allocator_{index}']}"
 
+    def grpc_addr(self, name: str) -> str:
+        """gRPC address Allocation/Triage use for a dependency: the real service or the stand-ins."""
+        port = self.ports[f"{name}_grpc"] if name in self.actual else self.ports["deps_grpc"]
+        return f"127.0.0.1:{port}"
+
+    def rest_url(self, name: str) -> str:
+        return f"http://127.0.0.1:{self.ports[f'{name}_rest']}" if name in self.actual else self.deps_http
+
     @property
     def events_enabled(self) -> bool:
         return bool(self.kafka_bootstrap and self.pubsub_host)
 
     # ---------- storage ----------
     def reset_database(self):
-        admin = create_engine(with_database(self.postgres_url, "postgres"), isolation_level="AUTOCOMMIT")
-        try:
-            with admin.connect() as connection:
-                connection.execute(text("SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                                        "WHERE datname = :db AND pid <> pg_backend_pid()"), {"db": self.database})
-                connection.execute(text(f'DROP DATABASE IF EXISTS "{self.database}"'))
-                connection.execute(text(f'CREATE DATABASE "{self.database}"'))
-        finally:
-            admin.dispose()
-        env = isolated_env(self.log_dir, DATABASE_URL=self.database_url)
+        prepare_allocation_database(self.postgres_url, self.database)
+        env = isolated_env(self.log_dir, DATABASE_URL=self.migrator_url)
         result = subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=REPO_ROOT, env=env,
                                 capture_output=True, text=True, timeout=120)
         if result.returncode != 0:
@@ -250,27 +312,27 @@ class Sandbox:
         return ManagedProcess(
             "dependencies",
             [sys.executable, "-m", "tests.support.sandbox_dependencies", "--grpc-port", str(self.ports["deps_grpc"]),
-             "--http-port", str(self.ports["deps_http"]), "--host", self.bind_host],
+             "--http-port", str(self.ports["deps_http"]), "--host", self.bind_host]
+            + (["--lock-addr", self.grpc_addr("lock")] if "lock" in self.actual else []),
             isolated_env(self.log_dir), self.log_dir / "dependencies.log", f"{self.deps_http}/healthz")
 
     def _triage(self):
         env = isolated_env(
             self.log_dir, TRIAGE_STORAGE_BACKEND="firestore", TRIAGE_FENCING_MODE="coordinator",
             FIRESTORE_PROJECT_ID=self.firestore_project, FIRESTORE_EMULATOR_HOST=self.firestore_host,
-            LOCK_COORDINATOR_ADDR=f"127.0.0.1:{self.ports['deps_grpc']}", START_GRPC="true",
+            LOCK_COORDINATOR_ADDR=self.grpc_addr("lock"), START_GRPC="true",
             TRIAGE_GRPC_PORT=self.ports["triage_grpc"], TRIAGE_REST_PORT=self.ports["triage_rest"],
             TRIAGE_REST_HOST=self.bind_host, TRIAGE_INSTANCE_ID="sandbox-triage-0")
         return ManagedProcess("triage", [sys.executable, "-m", "services.triage.main"], env,
                               self.log_dir / "triage.log", f"{self.triage_url}/readyz")
 
     def allocator_env(self, index: int) -> dict:
-        deps = f"127.0.0.1:{self.ports['deps_grpc']}"
         env = dict(
             DATABASE_URL=self.database_url, ALLOCATION_REST_HOST=self.bind_host,
             ALLOCATION_REST_PORT=self.ports[f"allocator_{index}"], POD_NAME=f"sandbox-allocator-{index}",
-            LOCK_SERVICE_ADDR=deps, BED_SERVICE_ADDR=deps, STAFF_SERVICE_ADDR=deps,
-            TRIAGE_SERVICE_ADDR=f"127.0.0.1:{self.ports['triage_grpc']}",
-            PATIENT_SERVICE_URL=f"{self.deps_http}/api/v1",
+            LOCK_SERVICE_ADDR=self.grpc_addr("lock"), BED_SERVICE_ADDR=self.grpc_addr("bed"),
+            STAFF_SERVICE_ADDR=self.grpc_addr("staff"), TRIAGE_SERVICE_ADDR=f"127.0.0.1:{self.ports['triage_grpc']}",
+            PATIENT_SERVICE_URL=f"{self.rest_url('patient')}/api/v1",
             ENABLE_RECOVERY_WORKER="true", RECOVERY_POLL_SECONDS="1", RECOVERY_CLAIM_SECONDS=self.recovery_claim_seconds,
             ENABLE_OUTBOX_WORKER="false",
         )
@@ -283,6 +345,7 @@ class Sandbox:
                 OUTBOX_PUBLISH_TIMEOUT_SECONDS="5", OUTBOX_MAX_BACKOFF_SECONDS="4", OUTBOX_CLAIM_SECONDS="10",
             )
             env.update(self.outbox_overrides)
+        env.update(self.allocator_overrides.get(index, {}))
         return env
 
     def _allocator(self, index: int):
@@ -290,12 +353,58 @@ class Sandbox:
                               isolated_env(self.log_dir, **self.allocator_env(index)),
                               self.log_dir / f"allocator-{index}.log", f"{self.allocator_url(index)}/readyz")
 
+    def _actual(self, name: str):
+        """The teammates' merged services through their own entrypoints (patient: see its launcher)."""
+        rest, grpc_port = self.ports[f"{name}_rest"], self.ports.get(f"{name}_grpc")
+        if name == "lock":
+            module, env = "services.lock_coordinator.grpc_server", dict(
+                ZK_HOSTS=self.zk_hosts, LOCK_GRPC_PORT=grpc_port, LOCK_REST_PORT=rest)
+        elif name == "bed":
+            module, env = "services.bed_registry.main", dict(
+                BED_REGISTRY_DATABASE_URL=self._actual_database_url("bed"), BED_REGISTRY_REST_PORT=rest,
+                BED_REGISTRY_REST_HOST=self.bind_host, BED_REGISTRY_GRPC_PORT=grpc_port)
+        elif name == "staff":
+            module, env = "services.staff_scheduler.main", dict(
+                FIRESTORE_PROJECT_ID=self.firestore_project, FIRESTORE_EMULATOR_HOST=self.firestore_host,
+                START_GRPC="true", STAFF_SCHEDULER_GRPC_PORT=grpc_port, STAFF_SCHEDULER_GRPC_HOST=self.bind_host,
+                STAFF_SCHEDULER_REST_PORT=rest, STAFF_SCHEDULER_REST_HOST=self.bind_host)
+        else:
+            module, env = "tests.support.patient_registry_local", dict(
+                PATIENT_REGISTRY_DATABASE_URL=self._actual_database_url("patient"), PATIENT_REGISTRY_REST_PORT=rest,
+                PATIENT_REGISTRY_REST_HOST=self.bind_host)
+        return ManagedProcess(name, [sys.executable, "-m", module], isolated_env(self.log_dir, **env),
+                              self.log_dir / f"{name}.log", f"{self.rest_url(name)}/readyz")
+
+    def _actual_database_url(self, name: str) -> str:
+        """Disposable database for a real service that keeps its own PostgreSQL schema."""
+        url = with_database(self.postgres_url, f"{self.database[:-5]}_{name}_test")
+        assert_disposable_database_url(url)
+        return url
+
+    def _reset_actual_databases(self):
+        for name in ("bed", "patient"):
+            if name not in self.actual:
+                continue
+            database = assert_disposable_database_url(self._actual_database_url(name))
+            admin = create_engine(with_database(self.postgres_url, "postgres"), isolation_level="AUTOCOMMIT")
+            try:
+                with admin.connect() as connection:
+                    connection.execute(text("SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                                            "WHERE datname = :db AND pid <> pg_backend_pid()"), {"db": database})
+                    connection.execute(text(f'DROP DATABASE IF EXISTS "{database}"'))
+                    connection.execute(text(f'CREATE DATABASE "{database}"'))
+            finally:
+                admin.dispose()
+
     def start(self, reset: bool = True):
         self.log_dir.mkdir(parents=True, exist_ok=True)
         if reset:
             self.reset_database()
             self.reset_firestore()
+            self._reset_actual_databases()
         self.ensure_brokers()
+        for name in self.actual:
+            self.processes[name] = self._actual(name).start()
         self.processes["dependencies"] = self._deps().start()
         self.processes["triage"] = self._triage().start()
         for index in range(self.allocators):
@@ -315,18 +424,31 @@ class Sandbox:
         return {name: process.pid for name, process in self.processes.items()}
 
     # ---------- fixtures ----------
-    def seed(self, fixture: dict):
-        """Seed shared dependencies and Triage assessments from a deterministic fictional fixture."""
-        status, body, _ = http_json("POST", f"{self.deps_http}/admin/seed", fixture)
-        if status != 200:
-            raise RuntimeError(f"dependency seed failed: {status} {body}")
+    def seed(self, fixture: dict) -> dict:
+        """Seed dependencies and Triage assessments from a deterministic fictional fixture.
+
+        Stand-in dependencies take the fixture through /admin/seed. Real services are seeded only
+        through their own APIs; the real Patient Registry assigns admission IDs, so this returns
+        {fixture admission ID: actual admission ID} (identity for the stand-in).
+        """
+        fixture = dict(fixture)
+        ids = {a["admission_id"]: a["admission_id"] for a in fixture.get("admissions", [])}
+        if "bed" in self.actual:
+            self.seeded_beds += seed_beds(self.rest_url("bed"), fixture.pop("beds", []))
+        if "staff" in self.actual:
+            seed_staff(self.rest_url("staff"), fixture.pop("staff_capacity", {}))
+        if "patient" in self.actual:
+            ids.update(seed_admissions(self.rest_url("patient"), fixture.pop("admissions", []), f"seed-{self.run_id}"))
+        if any(fixture.get(k) for k in ("beds", "staff_capacity", "admissions")):
+            _expect(http_json("POST", f"{self.deps_http}/admin/seed", fixture), 200, "dependency seed")
         for item in fixture.get("triage", []):
             status, body, _ = http_json(
-                "PUT", f"{self.triage_url}/api/v1/triage/{item['admission_id']}",
+                "PUT", f"{self.triage_url}/api/v1/triage/{ids[item['admission_id']]}",
                 {"triage_level": item["triage_level"], "pool_id": item["pool_id"]},
                 headers={"Idempotency-Key": f"seed-{self.run_id}-{item['admission_id']}"}, timeout=10)
             if status != 200:
                 raise RuntimeError(f"triage seed failed for an admission: {status} {body}")
+        return ids
 
     def fault(self, rpc: str, mode: str, count: int = 1, delay_seconds: float | None = None):
         payload = {"rpc": rpc, "mode": mode, "count": count}
@@ -337,12 +459,69 @@ class Sandbox:
             raise RuntimeError(f"fault injection failed: {body}")
 
     def dependency_state(self) -> dict:
-        return http_json("GET", f"{self.deps_http}/admin/state")[1]
+        """Stand-in state; bed ownership comes from the real Bed Registry when it is used, and staff
+        assignments are omitted for the real Staff Scheduler (it has no listing API)."""
+        state = http_json("GET", f"{self.deps_http}/admin/state")[1]
+        if "bed" in self.actual:
+            state["beds"] = [_expect(http_json("GET", f"{self.rest_url('bed')}/api/v1/beds/{bed_id}", timeout=10),
+                                     200, "bed read") for bed_id in self.seeded_beds]
+        if "staff" in self.actual:
+            state.pop("assignments", None)
+        return state
 
     def describe(self) -> dict:
         return {"run_id": self.run_id, "database": self.database, "firestore_project": self.firestore_project,
                 "ports": self.ports, "topics": self.topics if self.events_enabled else None,
                 "pids": self.pids(), "log_dir": str(self.log_dir)}
+
+
+# ---------- seeding through the real services' own APIs (sandbox and approved test environments) ----------
+
+def seed_beds(bed_url: str, beds: list) -> list:
+    """Bed Registry REST; returns the bed IDs created."""
+    for bed in beds:
+        _expect(http_json("POST", f"{bed_url}/api/v1/beds", bed, timeout=10), 201, "bed seed")
+    return [bed["bed_id"] for bed in beds]
+
+
+def seed_staff(staff_url: str, capacity: dict):
+    """Staff Scheduler REST: nurses on a current shift whose concurrent limits sum to the capacity."""
+    now = datetime.now(timezone.utc)
+    shift = {"starts_at": (now - timedelta(hours=1)).isoformat(), "ends_at": (now + timedelta(hours=12)).isoformat()}
+    for pool_id, remaining in capacity.items():
+        n = 0
+        while remaining > 0:
+            n += 1
+            staff_id, limit = f"nurse-{pool_id.lower()}-{n}", min(20, remaining)
+            remaining -= limit
+            _expect(http_json("POST", f"{staff_url}/api/v1/staff", {
+                "staff_id": staff_id, "display_name": f"Fictional Nurse {n}", "pool_ids": [pool_id],
+                "max_concurrent_assignments": limit}, headers={"Idempotency-Key": f"seed-{staff_id}"},
+                timeout=10), 201, "staff seed")
+            _expect(http_json("PUT", f"{staff_url}/api/v1/staff/{staff_id}/shifts/current", shift,
+                              headers={"Idempotency-Key": f"seed-{staff_id}-shift"}, timeout=10),
+                    (200, 201), "shift seed")
+
+
+def seed_admissions(patient_url: str, admissions: list, key_prefix: str) -> dict:
+    """Patient Registry REST with fictional patients; returns {fixture admission ID: assigned admission ID}."""
+    ids = {}
+    for admission in admissions:
+        key = f"{key_prefix}-{admission['admission_id']}"
+        patient = _expect(http_json("POST", f"{patient_url}/api/v1/patients", {
+            "first_name": "Fictional", "last_name": "Patient", "date_of_birth": "1980-01-01"},
+            headers={"Idempotency-Key": f"{key}-p"}, timeout=10), 201, "patient seed")
+        created = _expect(http_json("POST", f"{patient_url}/api/v1/admissions", {"patient_id": patient["patient_id"]},
+                                    headers={"Idempotency-Key": f"{key}-a"}, timeout=10), 201, "admission seed")
+        ids[admission["admission_id"]] = created["admission_id"]
+    return ids
+
+
+def _expect(result, statuses, what):
+    status, body, _ = result
+    if status not in ((statuses,) if isinstance(statuses, int) else statuses):
+        raise RuntimeError(f"{what} failed: {status} {body}")
+    return body
 
 
 def fixture_contention(pool_id: str = "POOL-K6", admissions: int = 50, beds: int = 10, staff: int = 100,
