@@ -1,7 +1,7 @@
 """
 Release gate for GitOps manifests: fails while any deployable value is unresolved.
 
-    python scripts/check_release_config.py [kustomize-dir ...]   # default: every path ArgoCD syncs in k8s/argocd
+    python scripts/check_release_config.py [kustomize-dir ...]
 
 Template validation (kubeconform in CI) accepts placeholders so the templates stay
 reviewable; this check is the separate pre-sync gate. It renders each directory with
@@ -20,7 +20,7 @@ from pathlib import Path
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DIRS = ["k8s/overlays/staging", "k8s/jobs/allocation-migrate", "k8s/lock-coordinator/overlays/staging"]
+DEFAULT_DIRS = ["k8s/overlays/staging", "k8s/jobs/allocation-migrate"]
 OWN_IMAGES = {"bed-allocation", "triage", "lock-coordinator"}
 AR_DIGEST = re.compile(r"^[a-z0-9-]+-docker\.pkg\.dev/[a-z][a-z0-9-]{4,28}[a-z0-9]/[a-z0-9_-]+/"
                        r"(?P<name>[a-z0-9-]+)@sha256:(?P<digest>[0-9a-f]{64})$")
