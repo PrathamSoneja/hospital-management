@@ -4,7 +4,7 @@
 -- Runs on Google Cloud Dataproc Flink Cluster
 -- ============================================================================
 
--- 1. Source Table: Kafka topic 'bed-events'
+-- 1. Source Table: Confluent Cloud Kafka topic 'bed-events'
 CREATE TABLE bed_events (
     schema_version VARCHAR,
     event_id VARCHAR,
@@ -28,6 +28,9 @@ CREATE TABLE bed_events (
     'topic' = 'bed-events',
     'properties.bootstrap.servers' = '${KAFKA_BOOTSTRAP_SERVERS}',
     'properties.group.id' = 'flink-resource-analytics-group',
+    'properties.security.protocol' = 'SASL_SSL',
+    'properties.sasl.mechanism' = 'PLAIN',
+    'properties.sasl.jaas.config' = 'org.apache.kafka.common.security.plain.PlainLoginModule required username="${KAFKA_SASL_USERNAME}" password="${KAFKA_SASL_PASSWORD}";',
     'scan.startup.mode' = 'earliest-offset',
     'format' = 'json',
     'json.fail-on-missing-field' = 'false',
@@ -59,7 +62,7 @@ FROM (
 )
 WHERE row_num = 1;
 
--- 3. Sink Table: Kafka topic 'bed-stats'
+-- 3. Sink Table: Confluent Cloud Kafka topic 'bed-stats'
 CREATE TABLE bed_stats (
     schema_version VARCHAR,
     pool_id VARCHAR,
@@ -77,6 +80,9 @@ CREATE TABLE bed_stats (
     'connector' = 'kafka',
     'topic' = 'bed-stats',
     'properties.bootstrap.servers' = '${KAFKA_BOOTSTRAP_SERVERS}',
+    'properties.security.protocol' = 'SASL_SSL',
+    'properties.sasl.mechanism' = 'PLAIN',
+    'properties.sasl.jaas.config' = 'org.apache.kafka.common.security.plain.PlainLoginModule required username="${KAFKA_SASL_USERNAME}" password="${KAFKA_SASL_PASSWORD}";',
     'format' = 'json'
 );
 
