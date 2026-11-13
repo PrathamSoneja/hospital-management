@@ -9,7 +9,7 @@ spec:
   project: default
   source:
     repoURL: https://github.com/PrathamSoneja/hospital-management.git
-    targetRevision: main
+    targetRevision: master
     path: gitops/apps
     directory:
       recurse: true

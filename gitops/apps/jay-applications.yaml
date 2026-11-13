@@ -1,20 +1,21 @@
-# ArgoCD Applications for Jay-owned workloads (Bed Registry + Resource Analytics). Like
-# pratham-applications.yaml, it is registered by the ArgoCD platform owner (Ruchir) and uses
-# MANUAL sync until staging is verified.
+# Argo CD child Applications for Bed Registry and Resource Analytics.
+# They remain manual-sync until their staging rollout is verified.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: hospital-bed-registry-staging
   namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
 spec:
-  project: PLACEHOLDER_ARGOCD_PROJECT
+  project: hospital-system
   source:
-    repoURL: PLACEHOLDER_GIT_REPO_URL
-    targetRevision: PLACEHOLDER_GIT_BRANCH
+    repoURL: https://github.com/PrathamSoneja/hospital-management.git
+    targetRevision: master
     path: k8s/bed-registry/base
   destination:
     server: https://kubernetes.default.svc
-    namespace: PLACEHOLDER_K8S_NAMESPACE
+    namespace: hospital-system
   syncPolicy:
     syncOptions:
       - ApplyOutOfSyncOnly=true
@@ -24,15 +25,17 @@ kind: Application
 metadata:
   name: hospital-resource-analytics-staging
   namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
 spec:
-  project: PLACEHOLDER_ARGOCD_PROJECT
+  project: hospital-system
   source:
-    repoURL: PLACEHOLDER_GIT_REPO_URL
-    targetRevision: PLACEHOLDER_GIT_BRANCH
+    repoURL: https://github.com/PrathamSoneja/hospital-management.git
+    targetRevision: master
     path: k8s/resource-analytics/base
   destination:
     server: https://kubernetes.default.svc
-    namespace: PLACEHOLDER_K8S_NAMESPACE
+    namespace: hospital-system
   syncPolicy:
     syncOptions:
       - ApplyOutOfSyncOnly=true
