@@ -8,14 +8,14 @@ spec:
   provider: gke
   parameters:
     secrets: |
-      - resourceName: "projects/PLACEHOLDER_PROJECT_ID/secrets/allocation-migration-database-url/versions/latest"
+      - resourceName: "projects/hospital-management-514618/secrets/allocation-migration-database-url/versions/latest"
         path: "database-url"
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
   # Rename per approved revision (e.g. allocation-migrate-20261031-03) so a Job is never reused.
-  name: allocation-migrate-PLACEHOLDER_REVISION
+  name: allocation-migrate-20261031-04
   labels:
     app.kubernetes.io/part-of: hospital-bed-management
 spec:

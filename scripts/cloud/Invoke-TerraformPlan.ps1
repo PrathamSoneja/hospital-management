@@ -11,7 +11,7 @@ Push-Location (Join-Path $RepoRoot 'infra\terraform')
 try {
     Invoke-Native { terraform init "-backend-config=$BackendConfig" }
     Invoke-Native { terraform validate }
-    Invoke-Native { terraform plan "-var-file=$VarFile" -out=tfplan.bin }
+    Invoke-Native { terraform plan -var-file $VarFile -out tfplan.bin }
     Invoke-Native { terraform show -no-color tfplan.bin } | Out-File -Encoding utf8 tfplan.txt
     $hash = (Get-FileHash tfplan.bin -Algorithm SHA256).Hash.ToLower()
     Write-Host "Review infra\terraform\tfplan.txt; approve plan sha256 $hash before Invoke-TerraformApply.ps1."
