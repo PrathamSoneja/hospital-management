@@ -63,7 +63,8 @@ Assigned Rubric Tasks:
             on health/ready checks, at-least-once outbox event deduplication by event_id,
             1-minute tumbling window aggregations, Firestore storage in pool_stats)
 Platform & DevOps Responsibilities:
-- Apache Kafka event streaming platform (Confluent Cloud / GKE Kafka, topics bed-events & bed-stats)
+- Confluent Cloud Managed Kafka streaming platform (topics: bed-events & bed-stats with 3 partitions each,
+  SASL_SSL/PLAIN auth; self-hosted GKE Kafka explicitly excluded to conserve GCP free tier compute credits and prevent resource exhaustion)
 - Apache Flink SQL stream processing pipeline deployed on Google Cloud Dataproc (flink_job.sql)
 - Cloud Storage bucket for Flink job artifacts, state checkpoints, and analytics persistence
 ================================================================================

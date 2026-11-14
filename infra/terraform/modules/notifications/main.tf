@@ -40,6 +40,7 @@ resource "google_cloud_run_v2_service" "notification" {
         container_port = 8080
       }
 
+
       env {
         name  = "FIRESTORE_PROJECT_ID"
         value = var.project_id
@@ -63,6 +64,13 @@ resource "google_project_iam_member" "notification_firestore" {
   role    = "roles/datastore.user"
   member  = "serviceAccount:${google_service_account.notification.email}"
 }
+
+resource "google_project_iam_member" "notification_firestore" {
+  project = var.project_id
+  role    = "roles/datastore.user"
+  member  = "serviceAccount:${google_service_account.notification.email}"
+}
+
 
 resource "google_service_account" "eventarc" {
   project      = var.project_id
@@ -223,4 +231,42 @@ resource "google_secret_manager_secret" "patient_registry_migration_database_url
   replication {
     auto {}
   }
+}
+
+data "google_project" "this" {
+  project_id = var.project_id
+}
+
+locals {
+  pubsub_service_agent  = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+  eventarc_subscription = google_eventarc_trigger.notifications.transport[0].pubsub[0].subscription
+}
+
+resource "google_pubsub_topic_iam_member" "dead_letter_publisher" {
+  project = var.project_id
+  topic   = google_pubsub_topic.dead_letter.name
+  role    = "roles/pubsub.publisher"
+  member  = local.pubsub_service_agent
+}
+
+resource "google_pubsub_subscription" "dead_letter_inspection" {
+  project                    = var.project_id
+  name                       = "${var.name_prefix}-bed-notifications-dlq-inspect"
+  topic                      = google_pubsub_topic.dead_letter.id
+  message_retention_duration = "604800s"
+  ack_deadline_seconds       = 60
+}
+
+resource "terraform_data" "notification_dead_letter_policy" {
+  triggers_replace = [local.eventarc_subscription, google_pubsub_topic.dead_letter.id, var.dead_letter_max_attempts]
+
+  provisioner "local-exec" {
+    command = "gcloud pubsub subscriptions update ${local.eventarc_subscription} --dead-letter-topic=${google_pubsub_topic.dead_letter.id} --max-delivery-attempts=${var.dead_letter_max_attempts} --min-retry-delay=10s --max-retry-delay=600s"
+  }
+
+  provisioner "local-exec" {
+    command = "gcloud pubsub subscriptions add-iam-policy-binding ${local.eventarc_subscription} --member=${local.pubsub_service_agent} --role=roles/pubsub.subscriber"
+  }
+
+  depends_on = [google_pubsub_topic_iam_member.dead_letter_publisher]
 }

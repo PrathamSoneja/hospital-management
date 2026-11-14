@@ -181,6 +181,20 @@ jobs:
             --tag "$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/staff-scheduler:$IMAGE_TAG" .
           docker push "$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/staff-scheduler:$IMAGE_TAG"
 
+      - name: Build and push Lock Coordinator
+        run: |
+          docker build \
+            --file services/lock_coordinator/Dockerfile \
+            --tag "$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/lock-coordinator:$IMAGE_TAG" .
+          docker push "$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/lock-coordinator:$IMAGE_TAG"
+
+      - name: Build and push Notification
+        run: |
+          docker build \
+            --file services/notification/Dockerfile \
+            --tag "$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/notification:$IMAGE_TAG" .
+          docker push "$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/notification:$IMAGE_TAG"
+
       - name: Update GitOps image references and project configuration
         shell: bash
         run: |
@@ -202,6 +216,8 @@ jobs:
             "patient-registry=$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/patient-registry:$IMAGE_TAG")
           (cd k8s/overlays/gke/staff-scheduler && kustomize edit set image \
             "staff-scheduler=$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/staff-scheduler:$IMAGE_TAG")
+          (cd k8s/lock-coordinator/overlays/gke && kustomize edit set image \
+            "lock-coordinator=$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/lock-coordinator:$IMAGE_TAG")
           sed -i \
             "s|PLACEHOLDER_PROJECT_ID:asia-south1:PLACEHOLDER_SQL_INSTANCE|$CLOUD_SQL_INSTANCE_CONNECTION_NAME|g" \
             k8s/overlays/gke/patient-registry/kustomization.yaml
