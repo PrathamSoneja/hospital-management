@@ -183,12 +183,13 @@ module "dataproc" {
   ]
 }
 
-module "confluent" {
-  source = "./modules/confluent"
-
-  name_prefix         = var.name_prefix
-  environment_name    = var.confluent_environment_name
-  kafka_cluster_name  = var.confluent_cluster_name
-  region              = var.confluent_region
-  deletion_protection = var.deletion_protection
-}
+# TEMPORARY: Confluent excluded from initial GCP-only deployment.
+# module "confluent" {
+#   source = "./modules/confluent"
+#
+#   name_prefix         = var.name_prefix
+#   environment_name    = var.confluent_environment_name
+#   kafka_cluster_name  = var.confluent_cluster_name
+#   region              = var.confluent_region
+#   deletion_protection = var.deletion_protection
+# }

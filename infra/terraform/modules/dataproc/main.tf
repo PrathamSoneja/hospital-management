@@ -25,6 +25,16 @@ resource "google_dataproc_cluster" "flink_cluster" {
       }
     }
 
+    worker_config {
+      num_instances = 2
+      machine_type  = var.machine_type
+
+      disk_config {
+        boot_disk_type    = "pd-standard"
+        boot_disk_size_gb = 50
+      }
+    }
+
     software_config {
       image_version       = "2.1-debian11"
       optional_components = ["FLINK", "DOCKER"]
