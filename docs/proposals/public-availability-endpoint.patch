@@ -1,0 +1,109 @@
+diff -ruN --strip-trailing-cr a/k8s/bed-registry/overlays/gke/kustomization.yaml b/k8s/bed-registry/overlays/gke/kustomization.yaml
+--- a/k8s/bed-registry/overlays/gke/kustomization.yaml	2026-11-15 19:18:18.856587300 +0530
++++ b/k8s/bed-registry/overlays/gke/kustomization.yaml	2026-11-15 19:18:19.144059800 +0530
+@@ -7,6 +7,7 @@
+   - ../../base
+   - secret-provider-class.yaml
+   - migration-job.yaml
++  - public-ingress.yaml
+ configMapGenerator:
+   - name: bed-registry-config
+     options:
+@@ -24,3 +25,9 @@
+       - op: replace
+         path: /metadata/annotations/iam.gke.io~1gcp-service-account
+         value: hospital-bed-registry@hospital-management-514618.iam.gserviceaccount.com
++  - target: {kind: Service, name: bed-registry-service}
++    patch: |-
++      - op: add
++        path: /metadata/annotations
++        value:
++          cloud.google.com/neg: '{"ingress": true}'
+diff -ruN --strip-trailing-cr a/k8s/bed-registry/overlays/gke/public-ingress.yaml b/k8s/bed-registry/overlays/gke/public-ingress.yaml
+--- a/k8s/bed-registry/overlays/gke/public-ingress.yaml	1970-01-01 05:30:00.000000000 +0530
++++ b/k8s/bed-registry/overlays/gke/public-ingress.yaml	2026-11-15 19:18:19.117947200 +0530
+@@ -0,0 +1,18 @@
++# Public, read-only, aggregate bed availability (counts per DEMO- pool; no identifiers). Proposal: replaces the
++# health-only Patient Registry Ingress once approved (one load balancer only).
++apiVersion: networking.k8s.io/v1
++kind: Ingress
++metadata:
++  name: hospital-public
++  annotations:
++    kubernetes.io/ingress.class: gce
++spec:
++  rules:
++    - http:
++        paths:
++          - path: /api/v1/public/availability
++            pathType: Exact
++            backend:
++              service:
++                name: bed-registry-service
++                port: {number: 8000}
+diff -ruN --strip-trailing-cr a/services/bed_registry/rest.py b/services/bed_registry/rest.py
+--- a/services/bed_registry/rest.py	2026-11-15 19:18:18.194635800 +0530
++++ b/services/bed_registry/rest.py	2026-11-15 19:18:19.117947200 +0530
+@@ -53,6 +53,18 @@
+     )
+     return bed
+ 
++@router.get("/public/availability")
++def public_availability(service: BedRegistryDomainService = Depends(get_service)):
++    """Read-only aggregate bed availability per pool (public demo endpoint; counts only).
++
++    PUBLIC_AVAILABILITY_POOL_PREFIX limits it to the synthetic demo pools (default DEMO-).
++    """
++    import os
++    prefix = os.environ.get("PUBLIC_AVAILABILITY_POOL_PREFIX", "DEMO-")
++    pools = service.availability_summary(prefix)
++    return {"pools": pools, "pool_prefix": prefix}
++
++
+ @router.get("/beds/{bed_id}", response_model=BedDto)
+ def get_bed(
+     bed_id: str = Path(..., description="Bed identifier"),
+diff -ruN --strip-trailing-cr a/services/bed_registry/service.py b/services/bed_registry/service.py
+--- a/services/bed_registry/service.py	2026-11-15 19:18:18.198070500 +0530
++++ b/services/bed_registry/service.py	2026-11-15 19:18:19.117947200 +0530
+@@ -45,6 +45,21 @@
+                 for b in beds
+             ]
+ 
++    def availability_summary(self, pool_prefix: str = "") -> List[dict]:
++        """Aggregate counts per pool and status only: no bed, allocation, patient or staff identifiers."""
++        from sqlalchemy import func
++        with self.session_factory() as session:
++            stmt = select(BedModel.pool_id, BedModel.status, func.count()).group_by(BedModel.pool_id, BedModel.status)
++            if pool_prefix:
++                stmt = stmt.where(BedModel.pool_id.startswith(pool_prefix))
++            pools: dict = {}
++            for pool_id, status, count in session.execute(stmt).all():
++                entry = pools.setdefault(pool_id, {"pool_id": pool_id, "available": 0, "occupied": 0, "other": 0, "total": 0})
++                key = {"AVAILABLE": "available", "OCCUPIED": "occupied"}.get(status, "other")
++                entry[key] += count
++                entry["total"] += count
++            return [pools[k] for k in sorted(pools)]
++
+     def get_bed(self, bed_id: str, request_id: str = "") -> Optional[BedDto]:
+         """Fetches bed details by ID."""
+         with self.session_factory() as session:
+diff -ruN --strip-trailing-cr a/tests/test_bed_registry.py b/tests/test_bed_registry.py
+--- a/tests/test_bed_registry.py	2026-11-15 19:18:18.559947400 +0530
++++ b/tests/test_bed_registry.py	2026-11-15 19:18:19.117947200 +0530
+@@ -417,3 +417,15 @@
+     from services.bed_registry.migrate import migrate
+     with pytest.raises(ValueError):
+         migrate("bed_registry; DROP TABLE beds")
++
++
++def test_public_availability_returns_counts_only_for_demo_pools(monkeypatch):
++    from fastapi.testclient import TestClient
++    from services.bed_registry.main import build_app
++    app = build_app(start_grpc=False, db_url="sqlite:///:memory:", auto_seed=False)
++    client = TestClient(app)
++    for bed_id, pool, status in (("d1", "DEMO-ICU", "AVAILABLE"), ("d2", "DEMO-ICU", "OCCUPIED"), ("x1", "REAL-ICU", "AVAILABLE")):
++        assert client.post("/api/v1/beds", json={"bed_id": bed_id, "pool_id": pool, "ward": "W", "status": status}).status_code == 201
++    body = client.get("/api/v1/public/availability").json()
++    assert body["pools"] == [{"pool_id": "DEMO-ICU", "available": 1, "occupied": 1, "other": 0, "total": 2}]
++    assert "d1" not in str(body) and "REAL-ICU" not in str(body)

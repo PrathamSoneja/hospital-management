@@ -45,7 +45,8 @@ spec:
 
 def test_resolved_copy_passes_and_tags_are_rejected(kubectl, tmp_path):
     shutil.copytree(REPO_ROOT / "k8s", tmp_path / "k8s")
-    shutil.copytree(REPO_ROOT / "monitoring", tmp_path / "monitoring")  # Argo CD path "monitoring"
+    for extra in ("monitoring", "k6"):  # Argo CD paths outside k8s/
+        shutil.copytree(REPO_ROOT / extra, tmp_path / extra)
     digest = "sha256:" + "ab" * 32
     for path in [*(tmp_path / "k8s").rglob("*"), *(tmp_path / "monitoring").rglob("*")]:
         if path.is_file() and path.suffix in {".yaml", ".properties"}:

@@ -1,0 +1,18 @@
+# Never send credentials, state or local artefacts to the Docker build context.
+.git
+.venv
+.sandbox
+rendered
+**/__pycache__
+temp_*.txt
+.env
+.env.*
+!.env.*.example
+**/*.tfstate
+**/*.tfstate.*
+**/tfplan*
+**/*.tfvars
+**/.terraform
+**/*-key.json
+**/*credentials*.json
+**/*.pem

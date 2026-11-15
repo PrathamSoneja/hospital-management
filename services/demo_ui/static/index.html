@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bed Management Demo</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1d2330; --muted:#5d6675; --line:#dfe3ea; --accent:#2457d6;
+          --ok:#1b7f4a; --warn:#a15c00; --bad:#b42318; --chip:#eef1f6; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#14171c; --card:#1c2027; --ink:#e7eaf0; --muted:#9aa3b2;
+          --line:#2c323c; --accent:#7aa2ff; --ok:#5fd394; --warn:#f0b35a; --bad:#ff7b72; --chip:#262c35; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:16px 20px; border-bottom:1px solid var(--line); background:var(--card); }
+  h1 { font-size:18px; margin:0 0 8px; }
+  h2 { font-size:15px; margin:0 0 10px; }
+  main { display:grid; gap:16px; padding:16px 20px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .wide { grid-column: 1 / -1; }
+  label { display:inline-flex; flex-direction:column; gap:3px; margin:0 10px 8px 0; color:var(--muted); font-size:12px; }
+  input, select { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--ink); }
+  button { font:inherit; padding:6px 12px; border-radius:6px; border:1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--accent); }
+  button:disabled { opacity:.5; cursor:default; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:6px 4px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  .chip { display:inline-block; padding:1px 8px; border-radius:99px; background:var(--chip); font-size:12px; }
+  .ALLOCATED, .AVAILABLE, .up { color:var(--ok); } .WAITLISTED, .RECOVERING, .OCCUPIED { color:var(--warn); }
+  .RELEASED, .CANCELLED, .down { color:var(--bad); }
+  #status span { margin-right:12px; }
+  #log { font:12px/1.4 ui-monospace, Consolas, monospace; max-height:260px; overflow:auto; white-space:pre-wrap; margin:0; }
+  .muted { color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Hospital Bed Management — live demo console</h1>
+  <div id="status" class="muted">checking services…</div>
+  <div class="muted">Synthetic data only. Every action is a real call to the deployed services (REST → gRPC → Lock Coordinator/ZooKeeper → Pub/Sub → Notification).</div>
+</header>
+<main>
+  <section>
+    <h2>1 · Prepare a demo pool</h2>
+    <label>Pool ID <input id="pool" value="DEMO-ICU"></label>
+    <label>Beds <input id="bedCount" type="number" min="1" max="10" value="2" style="width:70px"></label>
+    <label>Nurse capacity <input id="staffCap" type="number" min="1" max="20" value="4" style="width:70px"></label>
+    <div><button onclick="setupPool()">Create beds + on-shift nurse</button></div>
+    <p class="muted">Bed Registry (beds, Cloud SQL) and Staff Scheduler (staff + shift, Firestore).</p>
+  </section>
+  <section>
+    <h2>2 · Admit and triage a patient</h2>
+    <label>Urgency (1 = most urgent) <select id="urgency"><option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option></select></label>
+    <div><button onclick="admit()">Admit synthetic patient</button></div>
+    <p class="muted">Patient Registry (patient + admission, Cloud SQL) then Triage (urgency, Firestore).</p>
+  </section>
+  <section class="wide">
+    <h2>3 · Admissions → allocate</h2>
+    <button class="ghost" onclick="allocateAll()">Allocate all pending concurrently</button>
+    <table><thead><tr><th>Admission</th><th>Urgency</th><th>Allocation</th><th>Bed</th><th></th></tr></thead><tbody id="admissions"></tbody></table>
+    <p class="muted">"Repeat" re-sends the same Idempotency-Key: the same allocation comes back, no second bed. Concurrent requests for one pool are serialized by the ZooKeeper lease with fencing tokens.</p>
+  </section>
+  <section>
+    <h2>Available beds <button class="ghost" onclick="refresh()">refresh</button></h2>
+    <table><thead><tr><th>Bed</th><th>Status</th><th>Allocation</th></tr></thead><tbody id="beds"></tbody></table>
+  </section>
+  <section>
+    <h2>Waitlist (priority order)</h2>
+    <table><thead><tr><th>#</th><th>Admission</th><th>Urgency</th></tr></thead><tbody id="waitlist"></tbody></table>
+    <p class="muted">Releasing a bed promotes the most urgent waiting admission.</p>
+  </section>
+  <section>
+    <h2>Allocations in pool</h2>
+    <table><thead><tr><th>Allocation</th><th>Status</th><th>Bed</th><th></th></tr></thead><tbody id="allocs"></tbody></table>
+  </section>
+  <section>
+    <h2>Resource analytics</h2>
+    <pre id="analytics" class="muted">—</pre>
+    <p class="muted">Kafka → Flink aggregation is deferred until Confluent is enabled; values may be empty.</p>
+  </section>
+  <section class="wide">
+    <h2>Request log</h2>
+    <pre id="log"></pre>
+  </section>
+</main>
+<script>
+const admissions = [];           // {admission_id, patient, urgency, allocation}
+const $ = (id) => document.getElementById(id);
+const pool = () => $("pool").value.trim();
+const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function log(line) { const el = $("log"); el.textContent = `${new Date().toLocaleTimeString()}  ${line}\n` + el.textContent; }
+
+async function call(service, method, path, body, key) {
+  const headers = {"Content-Type": "application/json", "X-Request-ID": "ui-" + uuid()};
+  if (key) headers["Idempotency-Key"] = key;
+  const res = await fetch(`/proxy/${service}/${path}`, {method, headers, body: body ? JSON.stringify(body) : undefined});
+  let data = null; try { data = await res.json(); } catch (_) {}
+  log(`${method} ${service}/${path} → ${res.status}${data && data.status ? " " + data.status : ""}${data && data.error ? " " + JSON.stringify(data.error) : ""}`);
+  if (!res.ok && res.status !== 202) throw Object.assign(new Error(`${service} ${res.status}`), {data});
+  return data;
+}
+
+async function status() {
+  try {
+    const s = await (await fetch("/api/status")).json();
+    $("status").innerHTML = Object.entries(s).map(([k, v]) => `<span class="${v ? "up" : "down"}">● ${esc(k)}</span>`).join("");
+  } catch (_) { $("status").textContent = "status unavailable"; }
+}
+
+async function setupPool() {
+  const p = pool(), n = Number($("bedCount").value), cap = Number($("staffCap").value);
+  for (let i = 1; i <= n; i++) {
+    await call("beds", "POST", "api/v1/beds", {bed_id: `${p}-bed-${String(i).padStart(2, "0")}`, pool_id: p, ward: `${p}-WARD`, status: "AVAILABLE"});
+  }
+  const staffId = `${p}-nurse-1`.replace(/[^A-Za-z0-9._-]/g, "-");
+  await call("staff", "POST", "api/v1/staff", {staff_id: staffId, display_name: "Demo Nurse", role: "NURSE", pool_ids: [p], max_concurrent_assignments: cap}, `ui-staff-${staffId}`);
+  const now = Date.now();
+  await call("staff", "PUT", `api/v1/staff/${staffId}/shifts/demo-shift`, {starts_at: new Date(now - 3600e3).toISOString(), ends_at: new Date(now + 12 * 3600e3).toISOString()}, `ui-shift-${staffId}`);
+  refresh();
+}
+
+async function admit() {
+  const n = admissions.length + 1, urgency = Number($("urgency").value);
+  const patient = await call("patients", "POST", "api/v1/patients", {first_name: "Demo", last_name: `Patient${n}`, date_of_birth: "1990-01-01"}, `ui-${uuid()}`);
+  const admission = await call("patients", "POST", "api/v1/admissions", {patient_id: patient.patient_id}, `ui-${uuid()}`);
+  await call("triage", "PUT", `api/v1/triage/${admission.admission_id}`, {triage_level: urgency, pool_id: pool()}, `ui-${uuid()}`);
+  admissions.push({admission_id: admission.admission_id, patient: `Demo Patient${n}`, urgency, allocation: null});
+  render();
+}
+
+async function allocate(a, repeat = false) {
+  try {
+    const r = await call("allocation", "POST", "api/v1/allocations", {admission_id: a.admission_id, pool_id: pool()}, `ui-alloc-${a.admission_id}`);
+    if (repeat && a.allocation && r.allocation_id === a.allocation.allocation_id) log(`idempotent replay: same allocation ${r.allocation_id}`);
+    a.allocation = r;
+  } catch (e) { a.allocation = a.allocation || {status: "ERROR"}; }
+  render(); refresh();
+}
+
+async function allocateAll() {
+  await Promise.all(admissions.filter((a) => !a.allocation).map((a) => allocate(a)));
+}
+
+async function release(allocationId) {
+  await call("allocation", "POST", `api/v1/allocations/${allocationId}/release`, {reason: "discharged (demo)"}, `ui-release-${allocationId}`);
+  setTimeout(refresh, 800);
+}
+
+function render() {
+  $("admissions").innerHTML = admissions.map((a, i) => {
+    const s = a.allocation;
+    return `<tr><td>${esc(a.patient)}<div class="muted">${esc(a.admission_id)}</div></td><td>${a.urgency}</td>
+      <td>${s ? `<span class="chip ${esc(s.status)}">${esc(s.status)}</span>` : "—"}</td><td>${esc(s && s.bed_id) || "—"}</td>
+      <td>${s ? `<button class="ghost" onclick="allocate(admissions[${i}], true)">Repeat</button>` : `<button onclick="allocate(admissions[${i}])">Allocate</button>`}</td></tr>`;
+  }).join("") || `<tr><td colspan="5" class="muted">No admissions yet.</td></tr>`;
+}
+
+async function refresh() {
+  const p = encodeURIComponent(pool());
+  try {
+    const beds = await call("beds", "GET", `api/v1/beds?pool_id=${p}`);
+    $("beds").innerHTML = (beds.beds || []).map((b) => `<tr><td>${esc(b.bed_id)}</td><td class="${esc(b.status)}">${esc(b.status)}</td><td class="muted">${esc(b.current_allocation_id) || "—"}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">No free beds (all occupied).</td></tr>`;
+  } catch (_) {}
+  try {
+    const w = await call("triage", "GET", `api/v1/waitlists/${p}`);
+    $("waitlist").innerHTML = (w.items || []).map((e, i) => `<tr><td>${i + 1}</td><td class="muted">${esc(e.admission_id)}</td><td>${esc(e.triage_level)}</td></tr>`).join("") || `<tr><td colspan="3" class="muted">Empty.</td></tr>`;
+  } catch (_) {}
+  try {
+    const list = await call("allocation", "GET", `api/v1/allocations?pool_id=${p}`);
+    const items = list.items || list.allocations || [];
+    for (const a of admissions) { const m = items.find((x) => x.admission_id === a.admission_id); if (m) a.allocation = m; }
+    $("allocs").innerHTML = items.map((a) => `<tr><td class="muted">${esc(a.allocation_id)}</td><td class="${esc(a.status)}">${esc(a.status)}</td><td>${esc(a.bed_id) || "—"}</td>
+      <td>${a.status === "ALLOCATED" ? `<button class="ghost" onclick="release('${esc(a.allocation_id)}')">Release</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">None.</td></tr>`;
+    render();
+  } catch (_) {}
+  try { $("analytics").textContent = JSON.stringify(await call("analytics", "GET", "api/v1/analytics/summary"), null, 2); } catch (_) {}
+}
+
+status(); render(); refresh(); setInterval(status, 15000);
+</script>
+</body>
+</html>

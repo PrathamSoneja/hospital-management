@@ -1,0 +1,276 @@
+diff -ruN --strip-trailing-cr a/infra/terraform/main.tf b/infra/terraform/main.tf
+--- a/infra/terraform/main.tf	2026-11-15 19:12:21.850798000 +0530
++++ b/infra/terraform/main.tf	2026-11-15 19:12:22.719016200 +0530
+@@ -189,16 +189,16 @@
+   ]
+ }
+ 
+-# TEMPORARY: Confluent excluded from initial GCP-only deployment.
+-# module "confluent" {
+-#   source = "./modules/confluent"
+-#
+-#   name_prefix         = var.name_prefix
+-#   environment_name    = var.confluent_environment_name
+-#   kafka_cluster_name  = var.confluent_cluster_name
+-#   region              = var.confluent_region
+-#   deletion_protection = var.deletion_protection
+-# }
++# Confluent Cloud Kafka (requirement e): topics bed-events / bed-stats and least-privilege API keys.
++module "confluent" {
++  source = "./modules/confluent"
++
++  name_prefix         = var.name_prefix
++  environment_name    = var.confluent_environment_name
++  kafka_cluster_name  = var.confluent_cluster_name
++  region              = var.confluent_region
++  deletion_protection = var.deletion_protection
++}
+ 
+ # Bed Registry database URLs (Cloud SQL Auth Proxy sidecar on 127.0.0.1:5432, private IP). Write-only secret
+ # data built from ephemeral variables: not stored in plan files or state; a new version is written only when
+@@ -218,3 +218,70 @@
+ 
+   depends_on = [module.cloudsql]
+ }
++
++# ---------- Kafka runtime credentials in Secret Manager (values come from the Confluent API keys) ----------
++locals {
++  kafka_credentials = {
++    allocation = { username = module.notifications.kafka_username_secret_id, password = module.notifications.kafka_password_secret_id, key = "bed_allocation" }
++    analytics  = { username = google_secret_manager_secret.kafka_sasl["analytics-username"].secret_id, password = google_secret_manager_secret.kafka_sasl["analytics-password"].secret_id, key = "resource_analytics" }
++    flink      = { username = google_secret_manager_secret.kafka_sasl["flink-username"].secret_id, password = google_secret_manager_secret.kafka_sasl["flink-password"].secret_id, key = "flink" }
++  }
++}
++
++resource "google_secret_manager_secret" "kafka_sasl" {
++  for_each  = toset(["analytics-username", "analytics-password", "flink-username", "flink-password"])
++  project   = var.project_id
++  secret_id = "kafka-${replace(each.key, "-", "-sasl-")}"
++
++  replication {
++    auto {}
++  }
++}
++
++resource "google_secret_manager_secret_version" "kafka_username" {
++  for_each    = local.kafka_credentials
++  secret      = "projects/${var.project_id}/secrets/${each.value.username}"
++  secret_data = module.confluent.runtime_credentials[each.value.key].username
++}
++
++resource "google_secret_manager_secret_version" "kafka_password" {
++  for_each    = local.kafka_credentials
++  secret      = "projects/${var.project_id}/secrets/${each.value.password}"
++  secret_data = module.confluent.runtime_credentials[each.value.key].password
++}
++
++# Resource Analytics reads only its own Kafka credentials.
++resource "google_secret_manager_secret_iam_member" "analytics_kafka_accessor" {
++  for_each  = toset(["analytics-username", "analytics-password"])
++  project   = var.project_id
++  secret_id = google_secret_manager_secret.kafka_sasl[each.key].secret_id
++  role      = "roles/secretmanager.secretAccessor"
++  member    = "serviceAccount:${var.name_prefix}-resource-analytics@${var.project_id}.iam.gserviceaccount.com"
++
++  depends_on = [module.iam]
++}
++
++# Operators who submit the Flink job (submit_flink_job.sh) read the Flink credentials.
++resource "google_secret_manager_secret_iam_member" "flink_kafka_operator" {
++  for_each = { for pair in setproduct(var.flink_operator_members, ["flink-username", "flink-password"]) : "${pair[0]}|${pair[1]}" => pair }
++
++  project   = var.project_id
++  secret_id = google_secret_manager_secret.kafka_sasl[each.value[1]].secret_id
++  role      = "roles/secretmanager.secretAccessor"
++  member    = each.value[0]
++}
++
++# IAP TCP forwarding to the Dataproc master (internal IP only) for the Flink job submission.
++resource "google_compute_firewall" "dataproc_iap_ssh" {
++  project       = var.project_id
++  name          = "${var.name_prefix}-vpc-allow-iap-ssh-dataproc"
++  network       = module.network.network_name
++  direction     = "INGRESS"
++  source_ranges = ["35.235.240.0/20"]
++  target_tags   = ["dataproc"]
++
++  allow {
++    protocol = "tcp"
++    ports    = ["22"]
++  }
++}
+diff -ruN --strip-trailing-cr a/infra/terraform/outputs.tf b/infra/terraform/outputs.tf
+--- a/infra/terraform/outputs.tf	2026-11-15 19:12:21.906352000 +0530
++++ b/infra/terraform/outputs.tf	2026-11-15 19:12:22.684052800 +0530
+@@ -113,24 +113,23 @@
+   value       = module.iam.patient_registry_migration_gsa
+ }
+ 
+-# TEMPORARY: Confluent outputs disabled while Confluent Cloud is excluded
+-# from the initial GCP-only deployment.
++# Confluent Cloud Kafka outputs (requirement e).
+ 
+-# output "confluent_cluster_id" {
+-#   description = "Confluent Cloud Kafka cluster ID."
+-#   value       = module.confluent.cluster_id
+-# }
++output "confluent_cluster_id" {
++  description = "Confluent Cloud Kafka cluster ID."
++  value       = module.confluent.cluster_id
++}
+ 
+-# output "confluent_bootstrap_endpoint" {
+-#   description = "Kafka bootstrap endpoint."
+-#   value       = module.confluent.bootstrap_endpoint
+-# }
++output "confluent_bootstrap_endpoint" {
++  description = "Kafka bootstrap endpoint."
++  value       = module.confluent.bootstrap_endpoint
++}
+ 
+-# output "confluent_runtime_credentials" {
+-#   description = "Sensitive Kafka credentials for Bed Allocation and Resource Analytics. Store as Kubernetes secrets through the approved secret workflow."
+-#   value       = module.confluent.runtime_credentials
+-#   sensitive   = true
+-# }
++output "confluent_runtime_credentials" {
++  description = "Sensitive Kafka credentials for Bed Allocation and Resource Analytics. Store as Kubernetes secrets through the approved secret workflow."
++  value       = module.confluent.runtime_credentials
++  sensitive   = true
++}
+ 
+ output "notification_topic_id" {
+   description = "Pub/Sub topic ID consumed by Eventarc for the notification service."
+diff -ruN --strip-trailing-cr a/infra/terraform/variables.tf b/infra/terraform/variables.tf
+--- a/infra/terraform/variables.tf	2026-11-15 19:12:21.906352000 +0530
++++ b/infra/terraform/variables.tf	2026-11-15 19:12:22.725957800 +0530
+@@ -334,3 +334,9 @@
+   type    = number
+   default = 1
+ }
++
++variable "flink_operator_members" {
++  description = "IAM members (e.g. user:jay@example.com) allowed to read the Flink Kafka credentials when submitting the job."
++  type        = list(string)
++  default     = []
++}
+diff -ruN --strip-trailing-cr a/k8s/overlays/staging/allocation.properties b/k8s/overlays/staging/allocation.properties
+--- a/k8s/overlays/staging/allocation.properties	2026-11-15 19:12:22.290451900 +0530
++++ b/k8s/overlays/staging/allocation.properties	2026-11-15 19:12:22.730220900 +0530
+@@ -19,12 +19,9 @@
+ RECOVERY_CLAIM_SECONDS=60
+ PUBSUB_PROJECT_ID=hospital-management-514618
+ PUBSUB_TOPIC_NOTIFICATIONS=bed-notifications
+-# GCP-only phase: Kafka (Confluent Cloud) is not provisioned yet. The outbox delivers Pub/Sub only;
+-# bed-events rows stay PENDING in Postgres and drain in order once Kafka is enabled. To enable Kafka:
+-# set OUTBOX_DESTINATIONS=pubsub,kafka, uncomment and fill the four KAFKA_* lines, and restore the two
+-# Kafka entries in secret-provider-class.yaml (their Secret Manager secrets need versions first).
+-OUTBOX_DESTINATIONS=pubsub
+-# KAFKA_BOOTSTRAP_SERVERS=PLACEHOLDER_KAFKA_BOOTSTRAP
+-# KAFKA_TOPIC_BED_EVENTS=PLACEHOLDER_KAFKA_TOPIC
+-# KAFKA_SECURITY_PROTOCOL=PLACEHOLDER_KAFKA_SECURITY_PROTOCOL
+-# KAFKA_SASL_MECHANISM=PLACEHOLDER_KAFKA_SASL_MECHANISM
++OUTBOX_DESTINATIONS=pubsub,kafka
++# Terraform output confluent_bootstrap_endpoint without the SASL_SSL:// prefix (host:9092).
++KAFKA_BOOTSTRAP_SERVERS=PLACEHOLDER_KAFKA_BOOTSTRAP
++KAFKA_TOPIC_BED_EVENTS=bed-events
++KAFKA_SECURITY_PROTOCOL=SASL_SSL
++KAFKA_SASL_MECHANISM=PLAIN
+diff -ruN --strip-trailing-cr a/k8s/overlays/staging/kustomization.yaml b/k8s/overlays/staging/kustomization.yaml
+--- a/k8s/overlays/staging/kustomization.yaml	2026-11-15 19:12:22.294619800 +0530
++++ b/k8s/overlays/staging/kustomization.yaml	2026-11-15 19:12:22.732238000 +0530
+@@ -22,20 +22,6 @@
+   - name: triage-config
+     envs: [triage.properties]
+ patches:
+-  # GCP-only phase (OUTBOX_DESTINATIONS=pubsub): the Kafka secret files are not mounted, so drop their
+-  # *_FILE references (indices 5 then 4 of the base env list). Remove this patch when Kafka is enabled.
+-  - target: {kind: Deployment, name: bed-allocation-service}
+-    patch: |-
+-      - op: test
+-        path: /spec/template/spec/containers/0/env/5/name
+-        value: KAFKA_SASL_PASSWORD_FILE
+-      - op: remove
+-        path: /spec/template/spec/containers/0/env/5
+-      - op: test
+-        path: /spec/template/spec/containers/0/env/4/name
+-        value: KAFKA_SASL_USERNAME_FILE
+-      - op: remove
+-        path: /spec/template/spec/containers/0/env/4
+   - target: {kind: ServiceAccount, name: bed-allocation-sa}
+     patch: |-
+       - op: replace
+diff -ruN --strip-trailing-cr a/k8s/overlays/staging/secret-provider-class.yaml b/k8s/overlays/staging/secret-provider-class.yaml
+--- a/k8s/overlays/staging/secret-provider-class.yaml	2026-11-15 19:12:22.295838200 +0530
++++ b/k8s/overlays/staging/secret-provider-class.yaml	2026-11-15 19:12:22.730220900 +0530
+@@ -10,9 +10,7 @@
+     secrets: |
+       - resourceName: "projects/hospital-management-514618/secrets/allocation-database-url/versions/latest"
+         path: "database-url"
+-      # GCP-only phase (OUTBOX_DESTINATIONS=pubsub): the Kafka secrets have no versions yet and a missing
+-      # version fails the CSI mount, so they are not mounted. Restore these entries with Kafka.
+-      # - resourceName: "projects/hospital-management-514618/secrets/kafka-allocation-sasl-username/versions/latest"
+-      #   path: "kafka-sasl-username"
+-      # - resourceName: "projects/hospital-management-514618/secrets/kafka-allocation-sasl-password/versions/latest"
+-      #   path: "kafka-sasl-password"
++      - resourceName: "projects/hospital-management-514618/secrets/kafka-allocation-sasl-username/versions/latest"
++        path: "kafka-sasl-username"
++      - resourceName: "projects/hospital-management-514618/secrets/kafka-allocation-sasl-password/versions/latest"
++        path: "kafka-sasl-password"
+diff -ruN --strip-trailing-cr a/k8s/resource-analytics/overlays/gke/kustomization.yaml b/k8s/resource-analytics/overlays/gke/kustomization.yaml
+--- a/k8s/resource-analytics/overlays/gke/kustomization.yaml	2026-11-15 19:12:22.313827700 +0530
++++ b/k8s/resource-analytics/overlays/gke/kustomization.yaml	2026-11-15 19:12:22.740822200 +0530
+@@ -1,11 +1,12 @@
+ # GKE overlay for Resource Analytics (Argo CD path). Firestore (Native, (default)) stores pool_stats.
+-# GCP-only phase: no KAFKA_BOOTSTRAP_SERVERS, so the consumer is not started and readiness depends
+-# on Firestore only. With Kafka: add KAFKA_BOOTSTRAP_SERVERS and the SASL secrets here.
++# Kafka phase: consumes the Flink results topic bed-stats (KAFKA_INPUT_TOPIC in the base) with its own
++# credentials; readiness then also requires the consumer to be running.
+ apiVersion: kustomize.config.k8s.io/v1beta1
+ kind: Kustomization
+ namespace: hospital-system
+ resources:
+   - ../../base
++  - secret-provider-class.yaml
+ images:
+   - name: resource-analytics
+     newName: asia-south1-docker.pkg.dev/hospital-management-514618/hospital-repo/resource-analytics
+@@ -19,6 +20,21 @@
+       - op: add
+         path: /spec/template/spec/containers/0/env/-
+         value: {name: ANALYTICS_STORAGE_BACKEND, value: firestore}
++      - op: add
++        path: /spec/template/spec/containers/0/env/-
++        value: {name: KAFKA_BOOTSTRAP_SERVERS, value: PLACEHOLDER_KAFKA_BOOTSTRAP}
++      - op: add
++        path: /spec/template/spec/containers/0/env/-
++        value: {name: KAFKA_SASL_USERNAME_FILE, value: /var/run/secrets/app/kafka-sasl-username}
++      - op: add
++        path: /spec/template/spec/containers/0/env/-
++        value: {name: KAFKA_SASL_PASSWORD_FILE, value: /var/run/secrets/app/kafka-sasl-password}
++      - op: add
++        path: /spec/template/spec/containers/0/volumeMounts
++        value: [{name: app-secrets, mountPath: /var/run/secrets/app, readOnly: true}]
++      - op: add
++        path: /spec/template/spec/volumes
++        value: [{name: app-secrets, csi: {driver: secrets-store-gke.csi.k8s.io, readOnly: true, volumeAttributes: {secretProviderClass: resource-analytics-secrets}}}]
+   - target: {kind: ServiceAccount, name: resource-analytics-sa}
+     patch: |-
+       - op: replace
+diff -ruN --strip-trailing-cr a/k8s/resource-analytics/overlays/gke/secret-provider-class.yaml b/k8s/resource-analytics/overlays/gke/secret-provider-class.yaml
+--- a/k8s/resource-analytics/overlays/gke/secret-provider-class.yaml	1970-01-01 05:30:00.000000000 +0530
++++ b/k8s/resource-analytics/overlays/gke/secret-provider-class.yaml	2026-11-15 19:12:22.733219600 +0530
+@@ -0,0 +1,13 @@
++# Resource Analytics' own Kafka credentials (DeveloperRead on bed-stats, group resource-analytics-*).
++apiVersion: secrets-store.csi.x-k8s.io/v1
++kind: SecretProviderClass
++metadata:
++  name: resource-analytics-secrets
++spec:
++  provider: gke
++  parameters:
++    secrets: |
++      - resourceName: "projects/hospital-management-514618/secrets/kafka-analytics-sasl-username/versions/latest"
++        path: "kafka-sasl-username"
++      - resourceName: "projects/hospital-management-514618/secrets/kafka-analytics-sasl-password/versions/latest"
++        path: "kafka-sasl-password"

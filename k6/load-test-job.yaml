@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hpa-load-test
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+  labels:
+    app.kubernetes.io/name: hpa-load-test
+    app.kubernetes.io/part-of: hospital-bed-management   # admitted by the Allocation/Triage NetworkPolicies
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: hpa-load-test
+        app.kubernetes.io/part-of: hospital-bed-management
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 12345
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: k6
+          image: grafana/k6:0.54.0
+          args: ["run", "--quiet", "/scripts/sustained-multi-pool.js"]
+          env:
+            - {name: ALLOCATION_URL, value: "http://bed-allocation-service:8000"}
+            - {name: TRIAGE_URL, value: "http://triage-service:8000"}
+            - {name: SEED_PATIENT_URL, value: "http://patient-registry-service:8000"}
+            - {name: SEED_BED_URL, value: "http://bed-registry-service:8000"}
+            - {name: SEED_STAFF_URL, value: "http://staff-scheduler-service:8000"}
+            - {name: POOL_IDS, value: "LOADTEST-A,LOADTEST-B"}
+            - {name: ADMISSIONS_PER_POOL, value: "600"}
+            - {name: SEED_BEDS, value: "10"}
+            - {name: VUS, value: "40"}
+            - {name: RAMP, value: "2m"}
+            - {name: DURATION, value: "10m"}
+            - {name: P95_THRESHOLD_MS, value: "3000"}
+          volumeMounts:
+            - {name: scripts, mountPath: /scripts, readOnly: true}
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+      volumes:
+        - name: scripts
+          configMap: {name: k6-scripts}

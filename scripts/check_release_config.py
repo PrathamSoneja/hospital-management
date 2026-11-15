@@ -23,9 +23,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # Every path an Argo CD Application in gitops/apps points at (keep in sync with gitops/apps/*.yaml).
 DEFAULT_DIRS = ["k8s/overlays/staging", "k8s/jobs/allocation-migrate", "k8s/lock-coordinator/overlays/gke",
                 "k8s/bed-registry/overlays/gke", "k8s/resource-analytics/overlays/gke",
-                "k8s/overlays/gke/patient-registry", "k8s/overlays/gke/staff-scheduler", "monitoring"]
+                "k8s/overlays/gke/patient-registry", "k8s/overlays/gke/staff-scheduler", "monitoring", "k8s/demo-ui", "k6"]
 OWN_IMAGES = {"bed-allocation", "triage", "lock-coordinator", "bed-registry", "resource-analytics",
-              "patient-registry", "staff-scheduler"}
+              "patient-registry", "staff-scheduler", "demo-ui"}
 AR_DIGEST = re.compile(r"^[a-z0-9-]+-docker\.pkg\.dev/[a-z][a-z0-9-]{4,28}[a-z0-9]/[a-z0-9_-]+/"
                        r"(?P<name>[a-z0-9-]+)@sha256:(?P<digest>[0-9a-f]{64})$")
 DNS_LABEL = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")

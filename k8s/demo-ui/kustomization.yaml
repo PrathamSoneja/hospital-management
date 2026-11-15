@@ -1,0 +1,11 @@
+# Private demo console (services/demo_ui). ClusterIP only, never public: it can write data and has no auth.
+# Open with: kubectl -n hospital-system port-forward svc/demo-ui 8080:80  ->  http://localhost:8080
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hospital-system
+resources:
+  - demo-ui.yaml
+images:
+  - name: demo-ui
+    newName: asia-south1-docker.pkg.dev/hospital-management-514618/hospital-repo/demo-ui
+    digest: sha256:0787f2c853b89f6914a99c4c5b8aeaefc744528b83200a5a925fe36d2358f9c2

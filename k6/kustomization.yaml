@@ -1,0 +1,13 @@
+# Argo CD path "k6": in-cluster sustained load for the HPA demonstration (requirement c).
+# Each manual sync of hospital-load-test re-runs the Job (Sync hook). It seeds two disposable pools with
+# synthetic data through the real APIs, then drives Allocation + Triage. Billable only through the CPU it
+# uses on the existing nodes; run only with approval and watch `kubectl -n hospital-system get hpa -w`.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hospital-system
+resources:
+  - load-test-job.yaml
+configMapGenerator:
+  - name: k6-scripts
+    files:
+      - sustained-multi-pool.js
