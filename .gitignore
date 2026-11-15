@@ -96,3 +96,10 @@ tfplan.txt
 # Local sandbox runtime state, logs, and load evidence (tests/sandbox)
 /.sandbox/
 desktop.ini
+
+# Never commit credentials or plan artefacts (temp files from 42fb8e6, Terraform plans, service-account keys).
+/temp_*.txt
+**/tfplan*
+*.pem
+*-key.json
+*credentials*.json

@@ -80,3 +80,29 @@ variable "resource_labels" {
   type    = map(string)
   default = {}
 }
+
+# Bed Registry database users. Ephemeral + write-only: the values never enter plan files or state. They are
+# needed only when a user is first created or its *_version is incremented (rotation).
+variable "bed_registry_password" {
+  type      = string
+  sensitive = true
+  ephemeral = true
+  default   = null
+}
+
+variable "bed_registry_password_version" {
+  type    = number
+  default = 1
+}
+
+variable "bed_registry_migrator_password" {
+  type      = string
+  sensitive = true
+  ephemeral = true
+  default   = null
+}
+
+variable "bed_registry_migrator_password_version" {
+  type    = number
+  default = 1
+}

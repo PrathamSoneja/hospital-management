@@ -40,3 +40,9 @@ variable "labels" {
   default     = {}
   description = "Resource labels"
 }
+
+variable "worker_count" {
+  type        = number
+  default     = 0
+  description = "Primary workers; 0 = single-node cluster (fits the 12-vCPU quota beside two GKE nodes)."
+}

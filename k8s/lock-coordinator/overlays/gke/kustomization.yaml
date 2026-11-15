@@ -6,8 +6,8 @@ resources:
   - zookeeper-service-account.yaml
 images:
   - name: lock-coordinator
-    newName: asia-south1-docker.pkg.dev/PLACEHOLDER_PROJECT_ID/hospital-repo/lock-coordinator
-    newTag: PLACEHOLDER_LOCK_COORDINATOR_IMAGE_TAG
+    newName: asia-south1-docker.pkg.dev/hospital-management-514618/hospital-repo/lock-coordinator
+    digest: sha256:744eb940295a3285f91c938c2789ecb4678b96f3285b6234f8ebea798164f85b
 patches:
   - target:
       group: apps
@@ -26,7 +26,7 @@ patches:
       - op: add
         path: /metadata/annotations
         value:
-          iam.gke.io/gcp-service-account: PLACEHOLDER_LOCK_COORDINATOR_GSA
+          iam.gke.io/gcp-service-account: hospital-lock-coordinator@hospital-management-514618.iam.gserviceaccount.com
 
 components:
   - ../../components/managed-prometheus

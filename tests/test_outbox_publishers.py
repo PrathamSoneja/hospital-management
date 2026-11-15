@@ -128,3 +128,35 @@ def test_kafka_security_config_comes_from_environment():
     assert config["security.protocol"] == "SASL_SSL" and config["sasl.mechanism"] == "SCRAM-SHA-512"
     plaintext = kafka_config_from_env({"KAFKA_BOOTSTRAP_SERVERS": "k:9092", "KAFKA_SECURITY_PROTOCOL": "PLAINTEXT"})
     assert "sasl.username" not in plaintext
+
+
+# ----- Pub/Sub-only mode (OUTBOX_DESTINATIONS=pubsub): GCP-only phase without Kafka -----
+
+PUBSUB_ONLY_ENV = {"ENVIRONMENT": "production", "PUBSUB_PROJECT_ID": "proj", "PUBSUB_TOPIC_NOTIFICATIONS": "n",
+                   "OUTBOX_DESTINATIONS": "pubsub"}
+
+
+def test_pubsub_only_needs_no_kafka_settings_and_builds_no_kafka_client(monkeypatch):
+    import services.bed_allocation.outbox.publishers as publishers
+
+    def no_kafka(*_args, **_kwargs):
+        raise AssertionError("KafkaPublisher must not be constructed in Pub/Sub-only mode")
+    monkeypatch.setattr(publishers, "KafkaPublisher", no_kafka)
+    monkeypatch.setattr(publishers, "PubSubPublisher", lambda project, timeout: ("pubsub", project))
+    built = build_event_publisher_from_env(PUBSUB_ONLY_ENV)  # no KAFKA_* and no *_FILE secrets
+    assert built.kafka is None and built.topic_map == {"bed-notifications": "n"}
+    with pytest.raises(PublisherConfigError, match="disabled"):
+        built.publish_kafka("bed-events", "POOL-A", "{}")  # never silently "delivered"
+
+
+@pytest.mark.parametrize("value", ["", "pubsub,kafka", " kafka , pubsub "])
+def test_kafka_settings_still_required_when_kafka_is_enabled(value):
+    env = {k: v for k, v in BASE_ENV.items() if k != "KAFKA_BOOTSTRAP_SERVERS"}
+    with pytest.raises(PublisherConfigError, match="KAFKA_BOOTSTRAP_SERVERS"):
+        build_event_publisher_from_env({**env, "OUTBOX_DESTINATIONS": value})
+
+
+@pytest.mark.parametrize("value,match", [("kafka", "must include pubsub"), ("pubsub,sqs", "unknown")])
+def test_invalid_destination_sets_fail_clearly(value, match):
+    with pytest.raises(PublisherConfigError, match=match):
+        build_event_publisher_from_env({**PUBSUB_ONLY_ENV, "OUTBOX_DESTINATIONS": value})

@@ -3,16 +3,49 @@ kind: Kustomization
 namespace: hospital-system
 resources:
   - ../../../patient-registry/base
+  - public-ingress.yaml
 configMapGenerator:
   - name: patient-registry-config
     options:
       annotations:
         argocd.argoproj.io/sync-wave: "-2"
     literals:
-      - GCP_PROJECT_ID=PLACEHOLDER_PROJECT_ID
-      - CLOUD_SQL_INSTANCE_CONNECTION_NAME=PLACEHOLDER_PROJECT_ID:asia-south1:PLACEHOLDER_SQL_INSTANCE
-      - PATIENT_DOCUMENTS_BUCKET=PLACEHOLDER_PATIENT_DOCUMENTS_BUCKET
+      - GCP_PROJECT_ID=hospital-management-514618
+      - CLOUD_SQL_INSTANCE_CONNECTION_NAME=hospital-management-514618:asia-south1:hospital-postgres
+      - PATIENT_DOCUMENTS_BUCKET=hospital-patient-docs-514618
 images:
   - name: patient-registry
-    newName: asia-south1-docker.pkg.dev/PLACEHOLDER_PROJECT_ID/hospital-repo/patient-registry
-    newTag: latest
+    newName: asia-south1-docker.pkg.dev/hospital-management-514618/hospital-repo/patient-registry
+    digest: sha256:194028b18845047482688c9ae9bdb99cda956633b9db2bd63b013c46f2af456d
+patches:
+  - target: {kind: ServiceAccount, name: patient-registry-sa}
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/iam.gke.io~1gcp-service-account
+        value: hospital-patient-registry@hospital-management-514618.iam.gserviceaccount.com
+  - target: {kind: ServiceAccount, name: patient-registry-migration-sa}
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/iam.gke.io~1gcp-service-account
+        value: hospital-pr-migrator@hospital-management-514618.iam.gserviceaccount.com
+  - target: {kind: SecretProviderClass, name: patient-registry-secrets}
+    patch: |-
+      - op: replace
+        path: /spec/parameters/secrets
+        value: |
+          - resourceName: "projects/hospital-management-514618/secrets/patient-registry-database-url/versions/latest"
+            path: "database-url"
+  - target: {kind: SecretProviderClass, name: patient-registry-migration-secrets}
+    patch: |-
+      - op: replace
+        path: /spec/parameters/secrets
+        value: |
+          - resourceName: "projects/hospital-management-514618/secrets/patient-registry-migration-database-url/versions/latest"
+            path: "database-url"
+  # Container-native load balancing (NEGs) for the public Ingress; health check follows the readiness probe.
+  - target: {kind: Service, name: patient-registry-service}
+    patch: |-
+      - op: add
+        path: /metadata/annotations
+        value:
+          cloud.google.com/neg: '{"ingress": true}'

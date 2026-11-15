@@ -60,23 +60,17 @@ jobs:
           docker compose config --quiet
           docker compose -f tests/sandbox/compose.yaml config --quiet
 
-      - name: Render and schema-validate Kubernetes templates
+      - name: Render, schema-validate and release-gate every Argo CD path
         run: |
           mkdir -p rendered
-          kubectl kustomize k8s/overlays/staging > rendered/staging.yaml
-          kubectl kustomize k8s/jobs/allocation-migrate > rendered/migrate.yaml
-          kubectl kustomize k8s/overlays/gke > rendered/gke-services.yaml
-          kubectl kustomize k8s/overlays/gke/patient-registry > rendered/gke-patient-registry.yaml
-          kubectl kustomize k8s/overlays/gke/staff-scheduler > rendered/gke-staff-scheduler.yaml
-          kubectl kustomize k8s/lock-coordinator/overlays/gke > rendered/gke-lock-coordinator.yaml
-          docker run --rm -v "$PWD/rendered:/m:ro" "$KUBECONFORM_IMAGE" \
-            -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0 \
-            /m/staging.yaml /m/migrate.yaml \
-            /m/gke-services.yaml /m/gke-patient-registry.yaml /m/gke-staff-scheduler.yaml /m/gke-lock-coordinator.yaml
-          # Templates intentionally hold placeholders; the release gate must reject them.
-          if python scripts/check_release_config.py > rendered/release-gate.txt; then
-            echo "release gate unexpectedly accepted placeholder templates"; exit 1
-          fi
+          # The Argo CD source paths are listed once, in scripts/check_release_config.py (DEFAULT_DIRS).
+          dirs=$(python -c "from scripts.check_release_config import DEFAULT_DIRS; print(' '.join(DEFAULT_DIRS))")
+          for dir in $dirs; do
+            kubectl kustomize "$dir" > "rendered/$(echo "$dir" | tr '/' '_').yaml"
+          done
+          docker run --rm -v "$PWD/rendered:/m:ro" "$KUBECONFORM_IMAGE"             -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0 /m
+          # The deployable revision must be fully resolved: no placeholders, digest-pinned repository images.
+          python scripts/check_release_config.py | tee rendered/release-gate.txt
 
       - name: Prometheus rules
         run: |

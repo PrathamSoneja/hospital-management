@@ -3,7 +3,7 @@
 # scripts/gitops/Set-ImageDigest.ps1 updates the image digests; nothing here is applied by hand.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: PLACEHOLDER_K8S_NAMESPACE          # Terraform var kubernetes_namespace (default "default")
+namespace: hospital-system
 resources:
   - ../../base
   - secret-provider-class.yaml
@@ -11,24 +11,38 @@ components:
   - ../../components/managed-prometheus   # GKE managed collection is enabled in Terraform (modules/gke)
 images:
   - name: bed-allocation
-    newName: PLACEHOLDER_REGION-docker.pkg.dev/PLACEHOLDER_PROJECT_ID/PLACEHOLDER_AR_REPOSITORY/bed-allocation
-    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    newName: asia-south1-docker.pkg.dev/hospital-management-514618/hospital-repo/bed-allocation
+    digest: sha256:9d0bcb6563d5a04c20ee280b0b3570f93ea357cd476e399c52bad5f59314733e
   - name: triage
-    newName: PLACEHOLDER_REGION-docker.pkg.dev/PLACEHOLDER_PROJECT_ID/PLACEHOLDER_AR_REPOSITORY/triage
-    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    newName: asia-south1-docker.pkg.dev/hospital-management-514618/hospital-repo/triage
+    digest: sha256:cace6664781aaa6e1b8ee162d718b7ce7dff8e7d399d5838110b5d24ddc2abda
 configMapGenerator:
   - name: allocation-config
     envs: [allocation.properties]
   - name: triage-config
     envs: [triage.properties]
 patches:
+  # GCP-only phase (OUTBOX_DESTINATIONS=pubsub): the Kafka secret files are not mounted, so drop their
+  # *_FILE references (indices 5 then 4 of the base env list). Remove this patch when Kafka is enabled.
+  - target: {kind: Deployment, name: bed-allocation-service}
+    patch: |-
+      - op: test
+        path: /spec/template/spec/containers/0/env/5/name
+        value: KAFKA_SASL_PASSWORD_FILE
+      - op: remove
+        path: /spec/template/spec/containers/0/env/5
+      - op: test
+        path: /spec/template/spec/containers/0/env/4/name
+        value: KAFKA_SASL_USERNAME_FILE
+      - op: remove
+        path: /spec/template/spec/containers/0/env/4
   - target: {kind: ServiceAccount, name: bed-allocation-sa}
     patch: |-
       - op: replace
         path: /metadata/annotations/iam.gke.io~1gcp-service-account
-        value: PLACEHOLDER_NAME_PREFIX-bed-allocation@PLACEHOLDER_PROJECT_ID.iam.gserviceaccount.com
+        value: hospital-bed-allocation@hospital-management-514618.iam.gserviceaccount.com
   - target: {kind: ServiceAccount, name: triage-sa}
     patch: |-
       - op: replace
         path: /metadata/annotations/iam.gke.io~1gcp-service-account
-        value: PLACEHOLDER_NAME_PREFIX-triage@PLACEHOLDER_PROJECT_ID.iam.gserviceaccount.com
+        value: hospital-triage@hospital-management-514618.iam.gserviceaccount.com

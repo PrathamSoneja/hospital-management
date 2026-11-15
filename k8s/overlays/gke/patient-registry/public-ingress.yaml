@@ -1,0 +1,21 @@
+# Required public URL (brief: "at least one web service accessible over public URL").
+# GKE external HTTP load balancer (ephemeral IP, plain HTTP). Until HTTPS and authentication exist, it routes
+# ONLY the read-only, non-sensitive GET /healthz of Patient Registry; every other path (all patient and
+# admission APIs, /readyz, /metrics, /docs) falls through to GKE's default backend and returns 404.
+# Delete this file (Argo CD prunes the Ingress and the load balancer) after the demo, with approval.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: patient-registry-public
+  annotations:
+    kubernetes.io/ingress.class: gce
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /healthz
+            pathType: Exact
+            backend:
+              service:
+                name: patient-registry-service
+                port: {number: 8000}

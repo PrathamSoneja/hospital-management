@@ -1,0 +1,7 @@
+admin123
+
+new pass = HospitalSecureDbPass2026!
+
+patient_registry_migrator_db_password
+allocation_app_db_password
+allocation_migrator_db_password

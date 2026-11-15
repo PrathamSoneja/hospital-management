@@ -101,3 +101,28 @@ def test_demo_mode_and_disabled_renewal_are_refused_outside_explicit_demos(monke
         monkeypatch.setenv(name, value)
     with pytest.raises(ConfigError, match=message):
         build_app("postgresql+psycopg2://app@127.0.0.1:1/none")
+
+
+def _allocation_cloud_env(monkeypatch, **extra):
+    for name in ("FIRESTORE_EMULATOR_HOST", "PUBSUB_EMULATOR_HOST", "GOOGLE_APPLICATION_CREDENTIALS", "USE_FAKES",
+                 "ALLOCATION_DEMO_MODE", "LOCK_RENEWAL_ENABLED", "OUTBOX_DESTINATIONS", "KAFKA_BOOTSTRAP_SERVERS",
+                 "KAFKA_TOPIC_BED_EVENTS", "KAFKA_SASL_USERNAME_FILE", "KAFKA_SASL_PASSWORD_FILE"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in {**CLOUD_ENV, "BED_SERVICE_ADDR": "bed:50053", "STAFF_SERVICE_ADDR": "staff:50051",
+                        "TRIAGE_SERVICE_ADDR": "triage:50051", "ENABLE_OUTBOX_WORKER": "true",
+                        "ENABLE_RECOVERY_WORKER": "false", **extra}.items():
+        monkeypatch.setenv(name, value)
+
+
+def test_allocation_starts_pubsub_only_without_any_kafka_configuration(monkeypatch):
+    from services.bed_allocation.main import build_app
+    _allocation_cloud_env(monkeypatch, OUTBOX_DESTINATIONS="pubsub")
+    app = build_app("postgresql+psycopg2://app@127.0.0.1:1/none", event_publisher=object())
+    assert app.title == "Hospital Bed Allocation Service"
+
+
+def test_allocation_still_requires_kafka_endpoint_when_kafka_delivery_is_enabled(monkeypatch):
+    from services.bed_allocation.main import build_app
+    _allocation_cloud_env(monkeypatch)  # default destinations: pubsub,kafka
+    with pytest.raises(ConfigError, match="KAFKA_BOOTSTRAP_SERVERS"):
+        build_app("postgresql+psycopg2://app@127.0.0.1:1/none", event_publisher=object())

@@ -49,6 +49,18 @@ locals {
       project_roles   = []
       bucket_roles    = {}
     }
+    # Bed Registry schema migration Job (bed_registry_migrator credentials only).
+    br-migrator = {
+      kubernetes_name = "bed-registry-migration-sa"
+      project_roles   = ["roles/cloudsql.client"]
+      bucket_roles    = {}
+    }
+    # Grafana's read-only Prometheus query frontend for Managed Service for Prometheus.
+    gmp-frontend = {
+      kubernetes_name = "gmp-frontend-sa"
+      project_roles   = ["roles/monitoring.viewer"]
+      bucket_roles    = {}
+    }
   }
 
   project_role_bindings = flatten([
@@ -187,6 +199,20 @@ resource "google_secret_manager_secret_iam_member" "patient_registry_accessor" {
   secret_id = var.patient_registry_secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.workloads["patient-registry"].email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "bed_registry_accessor" {
+  project   = var.project_id
+  secret_id = var.bed_registry_secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.workloads["bed-registry"].email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "bed_registry_migrator_accessor" {
+  project   = var.project_id
+  secret_id = var.bed_registry_migration_secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.workloads["br-migrator"].email}"
 }
 
 resource "google_service_account" "patient_registry_migrator" {

@@ -37,6 +37,43 @@ spec:
         fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
+      initContainers:
+        # Native sidecar (restartPolicy: Always), same pattern as Bed Allocation: private IP only,
+        # authenticates with the pod's Workload Identity (hospital-bed-registry GSA, roles/cloudsql.client).
+        - name: cloud-sql-proxy
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.14.1
+          restartPolicy: Always
+          args:
+            - --private-ip
+            - --structured-logs
+            - --port=5432
+            - --health-check
+            - --http-address=0.0.0.0
+            - --http-port=9801
+            - $(CLOUD_SQL_INSTANCE_CONNECTION_NAME)
+          env:
+            - name: CLOUD_SQL_INSTANCE_CONNECTION_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: bed-registry-config
+                  key: CLOUD_SQL_INSTANCE_CONNECTION_NAME
+          startupProbe:
+            httpGet:
+              path: /startup
+              port: 9801
+            periodSeconds: 2
+            failureThreshold: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
       containers:
         - name: bed-registry
           image: bed-registry
@@ -59,6 +96,17 @@ spec:
               value: "production"
             - name: AUTO_SEED_DEMO_BEDS
               value: "false"
+            # Secret Manager value mounted by the GKE Secret Manager CSI add-on; without it the service
+            # refuses to start in this profile (no in-memory fallback).
+            - name: BED_REGISTRY_DATABASE_URL_FILE
+              value: /var/run/secrets/app/database-url
+            # Runtime role has DML only; tables come from the migration Job (services.bed_registry.migrate).
+            - name: BED_REGISTRY_CREATE_SCHEMA
+              value: "false"
+          volumeMounts:
+            - name: app-secrets
+              mountPath: /var/run/secrets/app
+              readOnly: true
           resources:
             requests:
               cpu: 100m
@@ -82,3 +130,10 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 2
             failureThreshold: 2
+      volumes:
+        - name: app-secrets
+          csi:
+            driver: secrets-store-gke.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: bed-registry-secrets

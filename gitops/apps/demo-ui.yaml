@@ -1,0 +1,20 @@
+# Private demo console (Pratham). Manual sync; port-forward only, never exposed publicly.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hospital-demo-ui
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: hospital-system
+  source:
+    repoURL: https://github.com/PrathamSoneja/hospital-management.git
+    targetRevision: master
+    path: k8s/demo-ui
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hospital-system
+  syncPolicy:
+    syncOptions:
+      - ApplyOutOfSyncOnly=true

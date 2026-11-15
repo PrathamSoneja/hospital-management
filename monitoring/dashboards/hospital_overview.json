@@ -14,7 +14,7 @@
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
       "targets": [
         {
-          "expr": "sum(rate(http_requests_total[1m])) by (service)",
+          "expr": "sum(rate(http_requests_total[$__rate_interval])) by (service)",
           "legendFormat": "{{service}} RPS"
         }
       ]
@@ -26,7 +26,7 @@
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
       "targets": [
         {
-          "expr": "sum(rate(http_requests_total{status=~\"5..\"}[1m])) by (service)",
+          "expr": "sum(rate(http_requests_total{status=~\"5..\"}[$__rate_interval])) by (service)",
           "legendFormat": "{{service}} 5xx"
         }
       ]
@@ -38,11 +38,11 @@
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket[1m])) by (le, service))",
+          "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket[$__rate_interval])) by (le, service))",
           "legendFormat": "{{service}} p50"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[1m])) by (le, service))",
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[$__rate_interval])) by (le, service))",
           "legendFormat": "{{service}} p95"
         }
       ]
@@ -54,7 +54,7 @@
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
       "targets": [
         {
-          "expr": "sum(rate(allocation_requests_total[1m])) by (outcome, pool_id)",
+          "expr": "sum(rate(allocation_requests_total[$__rate_interval])) by (outcome, pool_id)",
           "legendFormat": "{{pool_id}} - {{outcome}}"
         }
       ]
@@ -66,7 +66,7 @@
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(lock_wait_seconds_bucket[1m])) by (le, pool_id))",
+          "expr": "histogram_quantile(0.95, sum(rate(lock_wait_seconds_bucket[$__rate_interval])) by (le, pool_id))",
           "legendFormat": "{{pool_id}} p95 Lock Wait"
         }
       ]
@@ -78,11 +78,11 @@
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
       "targets": [
         {
-          "expr": "sum(rate(lock_acquire_total{service=\"lock-coordinator\"}[1m])) by (outcome)",
+          "expr": "sum(rate(lock_acquire_total{service=\"lock-coordinator\"}[$__rate_interval])) by (outcome)",
           "legendFormat": "acquire {{outcome}}"
         },
         {
-          "expr": "sum(rate(lease_expirations_total{service=\"lock-coordinator\"}[1m]))",
+          "expr": "sum(rate(lease_expirations_total{service=\"lock-coordinator\"}[$__rate_interval]))",
           "legendFormat": "leases expired (not released)"
         }
       ]
@@ -122,7 +122,7 @@
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
       "targets": [
         {
-          "expr": "sum(rate(container_cpu_usage_seconds_total{container=~\"(bed-allocation|triage)\"}[1m])) by (container)",
+          "expr": "sum(rate(container_cpu_usage_seconds_total{container=~\"(bed-allocation|triage)\"}[$__rate_interval])) by (container)",
           "legendFormat": "{{container}} CPU cores"
         },
         {

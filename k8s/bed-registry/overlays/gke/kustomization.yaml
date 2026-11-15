@@ -1,0 +1,26 @@
+# GKE overlay for Bed Registry (Argo CD path). Replace the all-zero digest with the published image
+# digest (scripts/check_release_config.py rejects it until then).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hospital-system
+resources:
+  - ../../base
+  - secret-provider-class.yaml
+  - migration-job.yaml
+configMapGenerator:
+  - name: bed-registry-config
+    options:
+      annotations:
+        argocd.argoproj.io/sync-wave: "-2"   # needed by the migration hook
+    literals:
+      - CLOUD_SQL_INSTANCE_CONNECTION_NAME=hospital-management-514618:asia-south1:hospital-postgres
+images:
+  - name: bed-registry
+    newName: asia-south1-docker.pkg.dev/hospital-management-514618/hospital-repo/bed-registry
+    digest: sha256:4a5c7ca03726af5955acf9ba1b0f80c31dca8027e5c5da81eb26da5e468e3c31
+patches:
+  - target: {kind: ServiceAccount, name: bed-registry-sa}
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/iam.gke.io~1gcp-service-account
+        value: hospital-bed-registry@hospital-management-514618.iam.gserviceaccount.com

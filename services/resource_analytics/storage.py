@@ -123,6 +123,10 @@ def create_storage() -> BaseAnalyticsStorage:
         from google.cloud import firestore
         return FirestoreAnalyticsStorage()
     except Exception as e:
+        if os.environ.get("ENVIRONMENT", "").strip().lower() in {"staging", "production"}:
+            # Per-pod memory would silently drop pool_stats across replicas and restarts.
+            raise RuntimeError(f"Firestore analytics storage is unavailable ({type(e).__name__}); "
+                               "the in-memory fallback is for local/test only") from e
         logger.warning(f"Could not connect to Firestore ({e}), using InMemoryAnalyticsStorage.")
         return InMemoryAnalyticsStorage()
 

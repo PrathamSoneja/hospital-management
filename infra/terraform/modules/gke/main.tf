@@ -55,6 +55,15 @@ resource "google_container_cluster" "main" {
     }
   }
 
+  # IAM-gated DNS-based control-plane endpoint, enabled on 2026-11-15 with
+  # `gcloud container clusters update --enable-dns-access` after approval. Kept here so the next apply does
+  # not revert it. Requests still need Google IAM and Kubernetes RBAC; the IP allowlist below does not apply.
+  control_plane_endpoints_config {
+    dns_endpoint_config {
+      allow_external_traffic = true
+    }
+  }
+
   master_authorized_networks_config {
     # The public control-plane endpoint is restricted to explicitly configured CIDRs.
     gcp_public_cidrs_access_enabled = false
@@ -74,7 +83,10 @@ resource "google_container_cluster" "main" {
   }
 
   monitoring_config {
-    enable_components = ["SYSTEM_COMPONENTS"]
+    # SYSTEM_COMPONENTS plus only the packages the Grafana dashboard queries: kube_deployment_* (DEPLOYMENT),
+    # kube_horizontalpodautoscaler_* (HPA), kube_pod_container_status_restarts_total (POD),
+    # container_cpu_usage_seconds_total / container_memory_working_set_bytes (CADVISOR).
+    enable_components = ["SYSTEM_COMPONENTS", "DEPLOYMENT", "HPA", "POD", "CADVISOR"]
 
     managed_prometheus {
       enabled = true

@@ -1,0 +1,20 @@
+# Grafana + Managed Prometheus query frontend + extra PodMonitorings (Pratham). Manual sync.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hospital-monitoring
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: hospital-system
+  source:
+    repoURL: https://github.com/PrathamSoneja/hospital-management.git
+    targetRevision: master
+    path: monitoring
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hospital-system
+  syncPolicy:
+    syncOptions:
+      - ApplyOutOfSyncOnly=true

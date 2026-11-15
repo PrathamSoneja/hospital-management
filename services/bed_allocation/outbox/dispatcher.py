@@ -9,6 +9,10 @@ producer-assigned stream_sequence; an unfinished earlier row blocks only later
 rows of the same stream. Claim tokens fence database updates, not broker writes:
 a delayed publish from a worker whose claim expired can still reach the broker,
 so consumers deduplicate on event_id and use stream_sequence to detect gaps.
+
+A dispatcher claims only its enabled destinations. Rows of a disabled destination are left
+PENDING with their attempt budget untouched (deferred, never marked delivered) and are still
+counted in the backlog metric; they drain in sequence once that destination is enabled.
 """
 import logging
 import re
@@ -47,8 +51,12 @@ class EventPublisher(ABC):
 class OutboxDispatcher:
     def __init__(self, session_factory, publisher: EventPublisher, service_name: str = "bed-allocation",
                  owner_id: str | None = None, claim_seconds: int = 30, max_attempts: int = 12,
-                 base_backoff_seconds: int = 1, max_backoff_seconds: int = 300):
+                 base_backoff_seconds: int = 1, max_backoff_seconds: int = 300,
+                 destinations: tuple = ("pubsub", "kafka")):
+        if not destinations:
+            raise ValueError("at least one outbox destination must be enabled")
         self.session_factory = session_factory
+        self.destinations = tuple(destinations)
         self.publisher = publisher
         self.service_name = service_name
         self.owner_id = owner_id or f"outbox-{uuid.uuid4().hex}"
@@ -124,6 +132,7 @@ class OutboxDispatcher:
         candidates = []
         with self.session_factory() as session:
             rows = session.query(OutboxEventModel).filter(
+                OutboxEventModel.destination.in_(self.destinations),
                 OutboxEventModel.stream_sequence.is_not(None),
                 OutboxEventModel.pool_id.is_not(None),
                 OutboxEventModel.available_at <= now,

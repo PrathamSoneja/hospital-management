@@ -1,0 +1,18 @@
+# In-cluster k6 load for the HPA demonstration (Pratham). Manual sync only; each sync re-runs the Job.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hospital-load-test
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: hospital-system
+  source:
+    repoURL: https://github.com/PrathamSoneja/hospital-management.git
+    targetRevision: master
+    path: k6
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hospital-system
+  syncPolicy: {}

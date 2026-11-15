@@ -5,6 +5,10 @@
 // triage to TRIAGE_URL, creates an allocation on ALLOCATION_URL(S), discharges an existing
 // occupant every other iteration (exercising promotion), and reads the pool waitlist and
 // allocation list. Used for HPA observation; correctness is checked by contention.js.
+//
+// In-cluster mode (k8s/load-test): with SEED_PATIENT_URL, SEED_BED_URL and SEED_STAFF_URL set, setup()
+// seeds each pool through the real REST APIs (SEED_BEDS beds, one on-shift nurse, ADMISSIONS_PER_POOL
+// synthetic patients/admissions) and the iterations use those admission IDs. Disposable pools only.
 import http from 'k6/http';
 import exec from 'k6/execution';
 import { check, sleep } from 'k6';
@@ -19,6 +23,8 @@ const prefix = __ENV.ADMISSION_PREFIX || 'adm-load';
 // (written by scripts/seed_load_fixture.py). Without it, IDs are `${prefix}-${pool}-${n}` (sandbox stand-in).
 const seeded = __ENV.ADMISSIONS_FILE ? JSON.parse(open(__ENV.ADMISSIONS_FILE)) : null;
 const runId = __ENV.RUN_ID || `${Date.now()}`;
+const seedUrls = { patient: __ENV.SEED_PATIENT_URL, bed: __ENV.SEED_BED_URL, staff: __ENV.SEED_STAFF_URL };
+const seedInSetup = Boolean(seedUrls.patient && seedUrls.bed && seedUrls.staff);
 const releaseAllocated = (__ENV.RELEASE_ALLOCATED || 'true') === 'true';
 
 if (!allocationUrls.length || !triageUrl || poolIds.length < 2) {
@@ -26,6 +32,7 @@ if (!allocationUrls.length || !triageUrl || poolIds.length < 2) {
 }
 
 export const options = {
+  setupTimeout: __ENV.SETUP_TIMEOUT || '15m',
   scenarios: {
     sustained_multi_pool: {
       executor: 'ramping-vus',
@@ -63,14 +70,47 @@ function withRetry(send) {
   return response;
 }
 
-export default function () {
+function seedPost(url, body, key) {
+  const response = withRetry(() => http.post(url, JSON.stringify(body), { headers: headers(`seed-${key}`, key), tags: { kind: 'seed' } }));
+  if (![200, 201].includes(response.status)) throw new Error(`seeding failed: POST ${url} -> ${response.status}`);
+  return response;
+}
+
+export function setup() {
+  if (!seedInSetup) return null;
+  const admissions = {};
+  const now = Date.now();
+  for (const poolId of poolIds) {
+    for (let b = 1; b <= Number(__ENV.SEED_BEDS || 10); b += 1) {
+      seedPost(`${seedUrls.bed}/api/v1/beds`, { bed_id: `${poolId}-bed-${b}`, pool_id: poolId, ward: `${poolId}-WARD`, status: 'AVAILABLE' });
+    }
+    const staffId = `${poolId}-nurse-1`;
+    seedPost(`${seedUrls.staff}/api/v1/staff`, { staff_id: staffId, display_name: 'Load Nurse', role: 'NURSE', pool_ids: [poolId],
+      max_concurrent_assignments: 20 }, `k6-${runId}-staff-${staffId}`);
+    const shift = http.put(`${seedUrls.staff}/api/v1/staff/${staffId}/shifts/load-shift`,
+      JSON.stringify({ starts_at: new Date(now - 3600e3).toISOString(), ends_at: new Date(now + 12 * 3600e3).toISOString() }),
+      { headers: headers(`seed-shift-${staffId}`, `k6-${runId}-shift-${staffId}`) });
+    if (shift.status !== 200) throw new Error(`seeding failed: shift -> ${shift.status}`);
+    admissions[poolId] = [];
+    for (let n = 1; n <= perPool; n += 1) {
+      const patient = seedPost(`${seedUrls.patient}/api/v1/patients`, { first_name: 'Load', last_name: `P${n}`, date_of_birth: '1990-01-01' },
+        `k6-${runId}-patient-${poolId}-${n}`).json('patient_id');
+      admissions[poolId].push(seedPost(`${seedUrls.patient}/api/v1/admissions`, { patient_id: patient },
+        `k6-${runId}-admission-${poolId}-${n}`).json('admission_id'));
+    }
+  }
+  return { admissions };
+}
+
+export default function (data) {
+  const ids = (data && data.admissions) || seeded;
   const sequence = exec.scenario.iterationInTest;
   const poolId = poolIds[sequence % poolIds.length];
   const n = Math.floor(sequence / poolIds.length) + 1;
   if (n > perPool) {
     sleep(1);  // seeded admissions exhausted; keep reads only
   }
-  const admissionId = seeded ? seeded[poolId][Math.min(n, perPool) - 1] : `${prefix}-${poolId}-${n}`;
+  const admissionId = ids ? ids[poolId][Math.min(n, perPool) - 1] : `${prefix}-${poolId}-${n}`;
   const requestId = `k6-${runId}-${sequence}`;
   const allocationUrl = allocationUrls[sequence % allocationUrls.length];
 

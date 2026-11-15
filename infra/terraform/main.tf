@@ -86,6 +86,10 @@ module "cloudsql" {
   allocation_app_password_version            = var.allocation_app_db_password_version
   allocation_migrator_password               = var.allocation_migrator_db_password
   allocation_migrator_password_version       = var.allocation_migrator_db_password_version
+  bed_registry_password                      = var.bed_registry_db_password
+  bed_registry_password_version              = var.bed_registry_db_password_version
+  bed_registry_migrator_password             = var.bed_registry_migrator_db_password
+  bed_registry_migrator_password_version     = var.bed_registry_migrator_db_password_version
   deletion_protection                        = var.deletion_protection
 
   depends_on = [
@@ -158,6 +162,8 @@ module "iam" {
   kafka_password_secret_id             = module.notifications.kafka_password_secret_id
   patient_registry_secret_id           = module.notifications.patient_registry_secret_id
   patient_registry_migration_secret_id = module.notifications.patient_registry_migration_secret_id
+  bed_registry_secret_id               = module.notifications.bed_registry_secret_id
+  bed_registry_migration_secret_id     = module.notifications.bed_registry_migration_secret_id
   notification_topic_id                = module.notifications.notification_topic_id
 
   depends_on = [
@@ -183,12 +189,32 @@ module "dataproc" {
   ]
 }
 
-module "confluent" {
-  source = "./modules/confluent"
+# TEMPORARY: Confluent excluded from initial GCP-only deployment.
+# module "confluent" {
+#   source = "./modules/confluent"
+#
+#   name_prefix         = var.name_prefix
+#   environment_name    = var.confluent_environment_name
+#   kafka_cluster_name  = var.confluent_cluster_name
+#   region              = var.confluent_region
+#   deletion_protection = var.deletion_protection
+# }
 
-  name_prefix         = var.name_prefix
-  environment_name    = var.confluent_environment_name
-  kafka_cluster_name  = var.confluent_cluster_name
-  region              = var.confluent_region
-  deletion_protection = var.deletion_protection
+# Bed Registry database URLs (Cloud SQL Auth Proxy sidecar on 127.0.0.1:5432, private IP). Write-only secret
+# data built from ephemeral variables: not stored in plan files or state; a new version is written only when
+# the matching *_password_version changes.
+resource "google_secret_manager_secret_version" "bed_registry_database_url" {
+  secret                 = "projects/${var.project_id}/secrets/${module.notifications.bed_registry_secret_id}"
+  secret_data_wo         = "postgresql+psycopg2://bed_registry:${urlencode(var.bed_registry_db_password)}@127.0.0.1:5432/beds"
+  secret_data_wo_version = var.bed_registry_db_password_version
+
+  depends_on = [module.cloudsql]
+}
+
+resource "google_secret_manager_secret_version" "bed_registry_migration_database_url" {
+  secret                 = "projects/${var.project_id}/secrets/${module.notifications.bed_registry_migration_secret_id}"
+  secret_data_wo         = "postgresql+psycopg2://bed_registry_migrator:${urlencode(var.bed_registry_migrator_db_password)}@127.0.0.1:5432/beds"
+  secret_data_wo_version = var.bed_registry_migrator_db_password_version
+
+  depends_on = [module.cloudsql]
 }

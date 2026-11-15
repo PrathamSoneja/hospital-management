@@ -55,6 +55,16 @@ variable "kafka_password_secret_id" {
   type = string
 }
 
+variable "bed_registry_secret_id" {
+  description = "Secret Manager secret ID holding the Bed Registry runtime database URL."
+  type        = string
+}
+
+variable "bed_registry_migration_secret_id" {
+  description = "Secret Manager secret ID holding the Bed Registry migration database URL."
+  type        = string
+}
+
 variable "patient_registry_secret_id" {
   type = string
 }

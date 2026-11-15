@@ -179,7 +179,9 @@ def _observability(sandbox: Sandbox, out: Path) -> dict:
     for panel in dashboard["panels"]:
         for target in panel.get("targets", []):
             expr = target["expr"]
-            body = observability_get(f"{PROMETHEUS}/api/v1/query?query={urllib.parse.quote(expr)}")[1] or {}
+            # $__rate_interval is resolved by Grafana; the sandbox scrapes faster than 30 s, so 1m is valid here.
+            query = expr.replace("$__rate_interval", "1m")
+            body = observability_get(f"{PROMETHEUS}/api/v1/query?query={urllib.parse.quote(query)}")[1] or {}
             queries[expr] = {"panel": panel["title"], "series": len(body.get("data", {}).get("result", []))}
     result["dashboard_queries"] = queries
     endpoints = observability_get(f"{PROMETHEUS}/api/v1/label/endpoint/values")[1] or {}

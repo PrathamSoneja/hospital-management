@@ -39,7 +39,7 @@ def test_hpa_owns_replicas_with_approved_ranges(staging):
         [metric] = hpa["spec"]["metrics"]
         assert metric["resource"]["name"] == "cpu" and metric["resource"]["target"]["averageUtilization"] == 60
     assert expected == {}
-    apps = list(yaml.safe_load_all((REPO_ROOT / "k8s/argocd/pratham-applications.yaml").read_text()))
+    apps = list(yaml.safe_load_all((REPO_ROOT / "gitops/apps/pratham-applications.yaml").read_text()))
     workload = next(a for a in apps if a["spec"]["source"]["path"] == "k8s/overlays/staging")
     assert {"group": "apps", "kind": "Deployment", "jsonPointers": ["/spec/replicas"]} in workload["spec"]["ignoreDifferences"]
     assert "RespectIgnoreDifferences=true" in workload["spec"]["syncPolicy"]["syncOptions"]

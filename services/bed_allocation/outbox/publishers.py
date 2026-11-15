@@ -94,9 +94,13 @@ class KafkaPublisher:
 
 
 class BrokerEventPublisher(EventPublisher):
-    """Maps logical outbox topics to configured broker topics."""
+    """Maps logical outbox topics to configured broker topics.
 
-    def __init__(self, pubsub: PubSubPublisher, kafka: KafkaPublisher, topic_map: dict | None = None):
+    kafka is None when Kafka delivery is disabled (OUTBOX_DESTINATIONS=pubsub); the dispatcher then
+    never claims Kafka rows, so a Kafka publish reaching this adapter is a programming error.
+    """
+
+    def __init__(self, pubsub: PubSubPublisher, kafka: KafkaPublisher | None, topic_map: dict | None = None):
         self.pubsub = pubsub
         self.kafka = kafka
         self.topic_map = topic_map or {}
@@ -105,6 +109,8 @@ class BrokerEventPublisher(EventPublisher):
         return self.pubsub.publish(self.topic_map.get(topic, topic), payload_json, attributes)
 
     def publish_kafka(self, topic: str, key: str, payload_json: str) -> bool:
+        if self.kafka is None:
+            raise PublisherConfigError("Kafka delivery is disabled (OUTBOX_DESTINATIONS)")
         return self.kafka.publish(self.topic_map.get(topic, topic), key, payload_json)
 
 
@@ -131,6 +137,29 @@ def kafka_config_from_env(env=None) -> dict:
     return config
 
 
+OUTBOX_DESTINATIONS = ("pubsub", "kafka")
+
+
+def enabled_destinations_from_env(env=None) -> tuple:
+    """OUTBOX_DESTINATIONS: comma-separated subset of pubsub,kafka; default both.
+
+    Pub/Sub is mandatory (notifications). Kafka may be disabled for the GCP-only phase: Kafka rows
+    are still written by the business transaction and stay PENDING (deferred, never marked
+    delivered) until Kafka delivery is enabled again.
+    """
+    env = os.environ if env is None else env
+    raw = env.get("OUTBOX_DESTINATIONS", "").strip()
+    if not raw:
+        return OUTBOX_DESTINATIONS
+    names = [name.strip().lower() for name in raw.split(",") if name.strip()]
+    unknown = sorted(set(names) - set(OUTBOX_DESTINATIONS))
+    if unknown:
+        raise PublisherConfigError(f"OUTBOX_DESTINATIONS has unknown destinations: {', '.join(unknown)}")
+    if "pubsub" not in names:
+        raise PublisherConfigError("OUTBOX_DESTINATIONS must include pubsub")
+    return tuple(name for name in OUTBOX_DESTINATIONS if name in names)
+
+
 def build_event_publisher_from_env(env=None) -> BrokerEventPublisher:
     env = os.environ if env is None else env
     environment = env.get("ENVIRONMENT", "production").strip().lower()
@@ -139,11 +168,13 @@ def build_event_publisher_from_env(env=None) -> BrokerEventPublisher:
     timeout = float(env.get("OUTBOX_PUBLISH_TIMEOUT_SECONDS", "10"))
     if not 1 <= timeout <= 60:
         raise PublisherConfigError("OUTBOX_PUBLISH_TIMEOUT_SECONDS must be between 1 and 60")
-    # Validate all settings before constructing any client.
+    # Validate all settings before constructing any client; Kafka settings only when Kafka is enabled.
+    destinations = enabled_destinations_from_env(env)
     project_id = _required(env, "PUBSUB_PROJECT_ID")
-    kafka_config = kafka_config_from_env(env)
-    topic_map = {
-        "bed-notifications": _required(env, "PUBSUB_TOPIC_NOTIFICATIONS"),
-        "bed-events": _required(env, "KAFKA_TOPIC_BED_EVENTS"),
-    }
-    return BrokerEventPublisher(PubSubPublisher(project_id, timeout), KafkaPublisher(kafka_config, timeout), topic_map)
+    topic_map = {"bed-notifications": _required(env, "PUBSUB_TOPIC_NOTIFICATIONS")}
+    kafka_config = None
+    if "kafka" in destinations:
+        kafka_config = kafka_config_from_env(env)
+        topic_map["bed-events"] = _required(env, "KAFKA_TOPIC_BED_EVENTS")
+    kafka = KafkaPublisher(kafka_config, timeout) if kafka_config is not None else None
+    return BrokerEventPublisher(PubSubPublisher(project_id, timeout), kafka, topic_map)

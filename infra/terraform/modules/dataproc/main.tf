@@ -25,12 +25,25 @@ resource "google_dataproc_cluster" "flink_cluster" {
       }
     }
 
+    # Single-node cluster by default (worker_count = 0): 2 vCPU, so two GKE e2-standard-4 nodes + Dataproc fit
+    # the project's 12-vCPU global quota. Changing the worker count replaces the cluster.
+    worker_config {
+      num_instances = var.worker_count
+      machine_type  = var.machine_type
+
+      disk_config {
+        boot_disk_type    = "pd-standard"
+        boot_disk_size_gb = 50
+      }
+    }
+
     software_config {
       image_version       = "2.1-debian11"
       optional_components = ["FLINK", "DOCKER"]
-      override_properties = {
-        "dataproc:dataproc.allow.custom.images" = "true"
-      }
+      override_properties = merge(
+        { "dataproc:dataproc.allow.custom.images" = "true" },
+        var.worker_count == 0 ? { "dataproc:dataproc.allow.zero.workers" = "true" } : {},
+      )
     }
 
     endpoint_config {

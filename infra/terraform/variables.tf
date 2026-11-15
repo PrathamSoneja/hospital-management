@@ -187,9 +187,10 @@ variable "min_node_count" {
 }
 
 variable "max_node_count" {
+  # Two nodes total (single-zone pool, so per-zone = total) to stay within credits; raise only with approval.
   description = "Maximum number of nodes in the zonal GKE node pool."
   type        = number
-  default     = 4
+  default     = 2
 
   validation {
     condition     = var.max_node_count >= 2 && var.max_node_count <= 4
@@ -306,4 +307,30 @@ variable "resource_labels" {
     application = "hospital-management"
     managed-by  = "terraform"
   }
+}
+
+# Bed Registry database users. Ephemeral + write-only: the values never enter plan files or state. They are
+# needed only when a user is first created or its *_version is incremented (rotation).
+variable "bed_registry_db_password" {
+  type      = string
+  sensitive = true
+  ephemeral = true
+  default   = null
+}
+
+variable "bed_registry_db_password_version" {
+  type    = number
+  default = 1
+}
+
+variable "bed_registry_migrator_db_password" {
+  type      = string
+  sensitive = true
+  ephemeral = true
+  default   = null
+}
+
+variable "bed_registry_migrator_db_password_version" {
+  type    = number
+  default = 1
 }

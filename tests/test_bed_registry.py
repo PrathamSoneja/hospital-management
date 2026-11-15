@@ -377,3 +377,43 @@ def test_grpc_client_socket_integration(in_memory_service):
     finally:
         server.stop(grace=None)
 
+
+
+@pytest.mark.parametrize("env", [{"ENVIRONMENT": "production"}, {"ENVIRONMENT": "staging"},
+                                 {"BED_REGISTRY_DATABASE_URL_FILE": "/nonexistent/database-url"}])
+def test_cloud_profile_or_missing_secret_file_never_falls_back_to_in_memory_db(monkeypatch, env):
+    from services.bed_registry.db import get_database_url
+    from shared.config.runtime import ConfigError
+    for name in ("BED_REGISTRY_DATABASE_URL", "DATABASE_URL", "BED_REGISTRY_DATABASE_URL_FILE", "DATABASE_URL_FILE",
+                 "ENVIRONMENT"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(ConfigError, match="not configured"):
+        get_database_url()
+
+
+def test_local_profile_keeps_the_in_memory_default(monkeypatch):
+    from services.bed_registry.db import get_database_url
+    for name in ("BED_REGISTRY_DATABASE_URL", "DATABASE_URL", "BED_REGISTRY_DATABASE_URL_FILE", "DATABASE_URL_FILE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ENVIRONMENT", "local")
+    assert get_database_url() == "sqlite:///:memory:"
+
+
+def test_runtime_can_skip_schema_creation(monkeypatch, tmp_path):
+    from sqlalchemy import create_engine, inspect
+    from services.bed_registry.main import build_app
+    url = f"sqlite:///{tmp_path / 'beds.db'}"
+    monkeypatch.setenv("BED_REGISTRY_CREATE_SCHEMA", "false")
+    build_app(start_grpc=False, db_url=url)
+    assert inspect(create_engine(url)).get_table_names() == []      # runtime role creates nothing
+    monkeypatch.setenv("BED_REGISTRY_CREATE_SCHEMA", "true")
+    build_app(start_grpc=False, db_url=url)
+    assert "beds" in inspect(create_engine(url)).get_table_names()
+
+
+def test_migration_rejects_unsafe_role_names():
+    from services.bed_registry.migrate import migrate
+    with pytest.raises(ValueError):
+        migrate("bed_registry; DROP TABLE beds")
