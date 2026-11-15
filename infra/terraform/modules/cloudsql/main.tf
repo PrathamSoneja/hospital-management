@@ -84,6 +84,25 @@ resource "google_sql_user" "allocation_migrator" {
   password_wo_version = var.allocation_migrator_password_version
 }
 
+# Bed Registry: bed_registry_migrator owns the schema (migration Job); bed_registry is the runtime role and gets
+# DML only from the migration. Cloud SQL adds API-created users to cloudsqlsuperuser; the database owner removes
+# that from the runtime role once (docs/deployment-status-2026-11-15.md, "Bed Registry least privilege").
+resource "google_sql_user" "bed_registry" {
+  project             = var.project_id
+  name                = "bed_registry"
+  instance            = google_sql_database_instance.main.name
+  password_wo         = var.bed_registry_password
+  password_wo_version = var.bed_registry_password_version
+}
+
+resource "google_sql_user" "bed_registry_migrator" {
+  project             = var.project_id
+  name                = "bed_registry_migrator"
+  instance            = google_sql_database_instance.main.name
+  password_wo         = var.bed_registry_migrator_password
+  password_wo_version = var.bed_registry_migrator_password_version
+}
+
 resource "google_sql_database" "service_databases" {
   for_each = toset(["patients", "beds", "allocations"])
 

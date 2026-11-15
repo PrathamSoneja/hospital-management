@@ -9,6 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import StaticPool
 from services.bed_registry.models import Base
+from shared.config.runtime import CLOUD_PROFILES, ConfigError
 
 logger = logging.getLogger("bed-registry-db")
 
@@ -25,11 +26,15 @@ def get_database_url() -> str:
                     return content
         except Exception:
             pass
-    return (
-        os.environ.get("BED_REGISTRY_DATABASE_URL")
-        or os.environ.get("DATABASE_URL")
-        or "sqlite:///:memory:"
-    )
+    configured = os.environ.get("BED_REGISTRY_DATABASE_URL") or os.environ.get("DATABASE_URL")
+    if configured:
+        return configured
+    if db_url_file or os.environ.get("ENVIRONMENT", "").strip().lower() in CLOUD_PROFILES:
+        # A per-pod in-memory database in a cloud profile would give every replica its own bed
+        # inventory and fencing state; fail at startup instead of serving from a fake.
+        raise ConfigError("Bed Registry database URL is not configured (BED_REGISTRY_DATABASE_URL[_FILE] "
+                          "or DATABASE_URL[_FILE]); the in-memory fallback is for local/test only")
+    return "sqlite:///:memory:"
 
 def init_engine(db_url: str | None = None):
     global _ENGINE, _SESSION_FACTORY

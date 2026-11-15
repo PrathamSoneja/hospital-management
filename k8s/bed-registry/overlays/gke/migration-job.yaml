@@ -1,0 +1,96 @@
+# Bed Registry schema migration (Argo CD Sync hook, before the Deployment). Runs as bed_registry_migrator
+# through its own GSA (hospital-br-migrator: roles/cloudsql.client + accessor on the migration secret only),
+# creates the tables and grants the runtime role bed_registry DML only.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: bed-registry-migration-sa
+  annotations:
+    iam.gke.io/gcp-service-account: hospital-br-migrator@hospital-management-514618.iam.gserviceaccount.com
+    argocd.argoproj.io/sync-wave: "-2"
+automountServiceAccountToken: false
+---
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: bed-registry-migration-secrets
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  provider: gke
+  parameters:
+    secrets: |
+      - resourceName: "projects/hospital-management-514618/secrets/bed-registry-migration-database-url/versions/latest"
+        path: "database-url"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bed-registry-migration
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-wave: "-1"
+  labels:
+    app.kubernetes.io/name: bed-registry-migration
+    app.kubernetes.io/part-of: hospital-bed-management
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bed-registry-migration
+    spec:
+      restartPolicy: Never
+      serviceAccountName: bed-registry-migration-sa
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: cloud-sql-proxy
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.14.1
+          restartPolicy: Always
+          args: [--private-ip, --structured-logs, --port=5432, --health-check, --http-address=0.0.0.0,
+                 --http-port=9801, $(CLOUD_SQL_INSTANCE_CONNECTION_NAME)]
+          env:
+            - name: CLOUD_SQL_INSTANCE_CONNECTION_NAME
+              valueFrom: {configMapKeyRef: {name: bed-registry-config, key: CLOUD_SQL_INSTANCE_CONNECTION_NAME}}
+          startupProbe:
+            httpGet: {path: /startup, port: 9801}
+            periodSeconds: 2
+            failureThreshold: 30
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+      containers:
+        - name: migrate
+          image: bed-registry
+          command: ["python", "-m", "services.bed_registry.migrate"]
+          env:
+            - {name: ENVIRONMENT, value: production}
+            - {name: BED_REGISTRY_DATABASE_URL_FILE, value: /var/run/secrets/migration/database-url}
+            - {name: BED_REGISTRY_RUNTIME_ROLE, value: bed_registry}
+          volumeMounts:
+            - {name: migration-secret, mountPath: /var/run/secrets/migration, readOnly: true}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+      volumes:
+        - name: migration-secret
+          csi:
+            driver: secrets-store-gke.csi.k8s.io
+            readOnly: true
+            volumeAttributes: {secretProviderClass: bed-registry-migration-secrets}

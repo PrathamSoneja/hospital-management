@@ -5,5 +5,16 @@ resources:
   - ../../../staff-scheduler/base
 images:
   - name: staff-scheduler
-    newName: asia-south1-docker.pkg.dev/PLACEHOLDER_PROJECT_ID/hospital-repo/staff-scheduler
-    newTag: latest
+    newName: asia-south1-docker.pkg.dev/hospital-management-514618/hospital-repo/staff-scheduler
+    digest: sha256:688201fb0fc3401c24fcf78dda5b2f7ea39b800e291d5435055852caf6f1d019
+patches:
+  - target: {kind: ServiceAccount, name: staff-scheduler-sa}
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/iam.gke.io~1gcp-service-account
+        value: hospital-staff-scheduler@hospital-management-514618.iam.gserviceaccount.com
+  - target: {kind: Deployment, name: staff-scheduler}
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/5/value  # FIRESTORE_PROJECT_ID
+        value: hospital-management-514618

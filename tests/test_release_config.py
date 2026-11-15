@@ -24,11 +24,11 @@ def kubectl():
         pytest.skip("kubectl is required to render kustomize directories")
 
 
-def test_templates_are_blocked(kubectl):
+def test_argocd_paths_are_release_ready(kubectl):
+    # Every Argo CD path is resolved in Git: no placeholders, and every repo-built image is pinned to a
+    # real Artifact Registry digest (the all-zero template digest is rejected by the next test).
     problems = [p for d in DEFAULT_DIRS for p in check_rendered(render(d), d)]
-    assert any("unresolved placeholders" in p for p in problems)
-    assert any("not an Artifact Registry digest" in p for p in problems)  # placeholder registry path
-    assert any("namespace 'PLACEHOLDER_K8S_NAMESPACE'" in p for p in problems)
+    assert problems == [], problems
 
 
 def test_all_zero_digest_is_blocked_even_with_a_valid_registry():
@@ -45,8 +45,9 @@ spec:
 
 def test_resolved_copy_passes_and_tags_are_rejected(kubectl, tmp_path):
     shutil.copytree(REPO_ROOT / "k8s", tmp_path / "k8s")
+    shutil.copytree(REPO_ROOT / "monitoring", tmp_path / "monitoring")  # Argo CD path "monitoring"
     digest = "sha256:" + "ab" * 32
-    for path in (tmp_path / "k8s").rglob("*"):
+    for path in [*(tmp_path / "k8s").rglob("*"), *(tmp_path / "monitoring").rglob("*")]:
         if path.is_file() and path.suffix in {".yaml", ".properties"}:
             text = path.read_text(encoding="utf-8")
             for token in sorted(RESOLVED, key=len, reverse=True):
@@ -61,5 +62,5 @@ def test_resolved_copy_passes_and_tags_are_rejected(kubectl, tmp_path):
                               check=True).stdout
 
     assert [p for d in DEFAULT_DIRS for p in check_rendered(rendered(d), d)] == []
-    tagged = rendered(DEFAULT_DIRS[0]).replace(f"bed-allocation@{digest}", "bed-allocation:latest")
+    tagged = __import__("re").sub(r"bed-allocation@sha256:[0-9a-f]{64}", "bed-allocation:latest", rendered(DEFAULT_DIRS[0]))
     assert any("mutable image reference" in p for p in check_rendered(tagged, "staging"))

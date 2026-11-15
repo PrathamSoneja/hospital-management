@@ -1,0 +1,26 @@
+# GKE overlay for Resource Analytics (Argo CD path). Firestore (Native, (default)) stores pool_stats.
+# GCP-only phase: no KAFKA_BOOTSTRAP_SERVERS, so the consumer is not started and readiness depends
+# on Firestore only. With Kafka: add KAFKA_BOOTSTRAP_SERVERS and the SASL secrets here.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hospital-system
+resources:
+  - ../../base
+images:
+  - name: resource-analytics
+    newName: asia-south1-docker.pkg.dev/hospital-management-514618/hospital-repo/resource-analytics
+    digest: sha256:e50d0d988d41eb76f202e263567386c546ee0fd7aab6a84ce56df7bd1eb13b95
+patches:
+  - target: {kind: Deployment, name: resource-analytics-service}
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: FIRESTORE_PROJECT_ID, value: hospital-management-514618}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: ANALYTICS_STORAGE_BACKEND, value: firestore}
+  - target: {kind: ServiceAccount, name: resource-analytics-sa}
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/iam.gke.io~1gcp-service-account
+        value: hospital-resource-analytics@hospital-management-514618.iam.gserviceaccount.com

@@ -7,7 +7,7 @@ Template validation (kubeconform in CI) accepts placeholders so the templates st
 reviewable; this check is the separate pre-sync gate. It renders each directory with
 `kubectl kustomize` (no cluster access) and rejects:
   * any PLACEHOLDER token;
-  * images built from this repository (Allocation, Triage, Lock Coordinator) that are not <region>-docker.pkg.dev/<project>/<repo>/<name>@sha256:<64 hex>,
+  * images built from this repository (every GKE service) that are not <region>-docker.pkg.dev/<project>/<repo>/<name>@sha256:<64 hex>,
     or whose digest is all zeros;
   * mutable `:latest` tags on any container;
   * namespaces that are not valid DNS labels.
@@ -20,8 +20,12 @@ from pathlib import Path
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DIRS = ["k8s/overlays/staging", "k8s/jobs/allocation-migrate"]
-OWN_IMAGES = {"bed-allocation", "triage", "lock-coordinator"}
+# Every path an Argo CD Application in gitops/apps points at (keep in sync with gitops/apps/*.yaml).
+DEFAULT_DIRS = ["k8s/overlays/staging", "k8s/jobs/allocation-migrate", "k8s/lock-coordinator/overlays/gke",
+                "k8s/bed-registry/overlays/gke", "k8s/resource-analytics/overlays/gke",
+                "k8s/overlays/gke/patient-registry", "k8s/overlays/gke/staff-scheduler", "monitoring"]
+OWN_IMAGES = {"bed-allocation", "triage", "lock-coordinator", "bed-registry", "resource-analytics",
+              "patient-registry", "staff-scheduler"}
 AR_DIGEST = re.compile(r"^[a-z0-9-]+-docker\.pkg\.dev/[a-z][a-z0-9-]{4,28}[a-z0-9]/[a-z0-9_-]+/"
                        r"(?P<name>[a-z0-9-]+)@sha256:(?P<digest>[0-9a-f]{64})$")
 DNS_LABEL = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")

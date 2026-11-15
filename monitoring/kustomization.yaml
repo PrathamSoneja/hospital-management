@@ -1,0 +1,20 @@
+# Argo CD path "monitoring": Grafana + the Managed Service for Prometheus query frontend in hospital-system,
+# plus PodMonitorings for the services whose own overlays do not define one. Grafana is not exposed publicly;
+# open it with `kubectl -n hospital-system port-forward svc/grafana 3000:3000` (anonymous, read-only Viewer).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hospital-system
+resources:
+  - gke/gmp-frontend.yaml
+  - gke/grafana.yaml
+  - gke/podmonitorings.yaml
+configMapGenerator:
+  - name: grafana-dashboards
+    files:
+      - dashboards/hospital_overview.json
+  - name: grafana-dashboard-provider
+    files:
+      - grafana/provisioning/dashboards/provider.yaml
+  - name: grafana-datasources
+    files:
+      - gke/datasources.yaml

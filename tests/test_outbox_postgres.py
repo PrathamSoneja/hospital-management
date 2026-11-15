@@ -369,3 +369,37 @@ def test_shutdown_returns_unsent_claims_without_spending_attempts(pg_sessions):
     assert dispatcher.process_pending(should_stop=lambda: next(stops)) == 1
     states = sorted((row(pg_sessions, event_id).status, row(pg_sessions, event_id).attempt_count) for event_id, _ in ids)
     assert states == [("DELIVERED", 1), ("PENDING", 0), ("PENDING", 0)]
+
+
+def test_pubsub_only_dispatcher_defers_kafka_rows_without_spending_attempts(pg_sessions):
+    """Kafka disabled: Pub/Sub delivers and retries independently; Kafka rows stay PENDING, untouched,
+    and drain in their original order once a dispatcher with Kafka enabled runs."""
+    ids = seed(pg_sessions, [("kafka", "POOL-A"), ("pubsub", "POOL-A"), ("kafka", "POOL-A"), ("pubsub", "POOL-A")])
+    kafka_ids = [ids[0][0], ids[2][0]]
+    publisher = RecordingPublisher()
+    pubsub_only = OutboxDispatcher(pg_sessions, publisher, destinations=("pubsub",))
+
+    publisher.failing.add(("pubsub", "POOL-A"))
+    assert pubsub_only.process_pending() == 0          # Pub/Sub retry path still works
+    assert row(pg_sessions, ids[1][0]).status == "PENDING" and row(pg_sessions, ids[1][0]).attempt_count == 1
+    publisher.failing.clear()
+    make_due(pg_sessions, ids[1][0])
+    # A stream's next row is claimable only after its predecessor finished: one row per pass here.
+    assert pubsub_only.process_pending() + pubsub_only.process_pending() == 2
+    assert pubsub_only.process_pending() == 0                   # Kafka rows are never claimed
+    assert publisher.sequences("pubsub", "POOL-A") == [1, 2]
+    assert publisher.sequences("kafka", "POOL-A") == []
+    for event_id in kafka_ids:
+        deferred = row(pg_sessions, event_id)
+        assert (deferred.status, deferred.attempt_count, deferred.claim_token) == ("PENDING", 0, None)
+    assert pubsub_only.stream_report()["kafka"]["PENDING"] == 2   # backlog stays visible
+
+    both = OutboxDispatcher(pg_sessions, publisher)                # Kafka enabled later
+    assert both.process_pending() + both.process_pending() == 2
+    assert publisher.sequences("kafka", "POOL-A") == [1, 2]
+    assert all(row(pg_sessions, event_id).status == "DELIVERED" for event_id in kafka_ids)
+
+
+def test_dispatcher_requires_at_least_one_destination(pg_sessions):
+    with pytest.raises(ValueError):
+        OutboxDispatcher(pg_sessions, RecordingPublisher(), destinations=())

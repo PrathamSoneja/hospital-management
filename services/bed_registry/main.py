@@ -45,7 +45,10 @@ def seed_default_beds_if_empty(service: BedRegistryDomainService):
 def build_app(start_grpc: bool = False, db_url: str | None = None, auto_seed: bool | None = None) -> FastAPI:
     # 1. Initialize DB Engine & Tables
     init_engine(db_url)
-    init_db()
+    # In GKE the schema is created by the migration identity (services.bed_registry.migrate) and the
+    # runtime role has DML only, so BED_REGISTRY_CREATE_SCHEMA=false there. Local/test keeps create_all.
+    if os.environ.get("BED_REGISTRY_CREATE_SCHEMA", "true").strip().lower() != "false":
+        init_db()
 
     session_factory = get_session_factory()
     domain_service = BedRegistryDomainService(session_factory)

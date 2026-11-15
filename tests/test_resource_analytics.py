@@ -228,3 +228,17 @@ def test_rest_api_analytics_ingest_and_summary():
     assert summary["active_pools"] == 1
     assert summary["total_allocated"] == 1
 
+
+
+def test_cloud_profile_refuses_in_memory_fallback_when_firestore_is_unavailable(monkeypatch):
+    import services.resource_analytics.storage as storage
+
+    def unavailable():
+        raise RuntimeError("no credentials")
+    monkeypatch.setattr(storage, "FirestoreAnalyticsStorage", unavailable)
+    monkeypatch.delenv("ANALYTICS_STORAGE_BACKEND", raising=False)
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    with pytest.raises(RuntimeError, match="local/test only"):
+        storage.create_storage()
+    monkeypatch.setenv("ENVIRONMENT", "local")
+    assert isinstance(storage.create_storage(), InMemoryAnalyticsStorage)

@@ -1,0 +1,57 @@
+# Prometheus-compatible query API over Google Managed Service for Prometheus (read-only).
+# The GSA needs roles/monitoring.viewer and a Workload Identity binding for this KSA.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gmp-frontend-sa
+  annotations:
+    iam.gke.io/gcp-service-account: hospital-gmp-frontend@hospital-management-514618.iam.gserviceaccount.com
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gmp-frontend
+  labels: {app: gmp-frontend, app.kubernetes.io/part-of: hospital-bed-management}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: gmp-frontend}
+  template:
+    metadata:
+      labels: {app: gmp-frontend, app.kubernetes.io/part-of: hospital-bed-management}
+    spec:
+      serviceAccountName: gmp-frontend-sa
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: frontend
+          image: gke.gcr.io/prometheus-engine/frontend:v0.15.3-gke.0
+          args:
+            - --web.listen-address=:9090
+            - --query.project-id=hospital-management-514618
+          ports:
+            - {name: web, containerPort: 9090}
+          readinessProbe:
+            tcpSocket: {port: web}
+          livenessProbe:
+            tcpSocket: {port: web}
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gmp-frontend
+spec:
+  selector: {app: gmp-frontend}
+  ports:
+    - {name: web, port: 9090, targetPort: web}

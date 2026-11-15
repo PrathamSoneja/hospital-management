@@ -9,7 +9,7 @@ spec:
   endpoints:
     - port: http-rest
       path: /metrics
-      interval: 30s
+      interval: 60s
 ---
 apiVersion: monitoring.googleapis.com/v1
 kind: PodMonitoring
@@ -22,4 +22,4 @@ spec:
   endpoints:
     - port: http-rest
       path: /metrics
-      interval: 30s
+      interval: 60s

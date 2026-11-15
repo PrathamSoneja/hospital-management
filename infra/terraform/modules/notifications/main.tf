@@ -225,6 +225,24 @@ resource "google_secret_manager_secret" "patient_registry_database_url" {
   }
 }
 
+resource "google_secret_manager_secret" "bed_registry_database_url" {
+  project   = var.project_id
+  secret_id = "bed-registry-database-url"
+
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret" "bed_registry_migration_database_url" {
+  project   = var.project_id
+  secret_id = "bed-registry-migration-database-url"
+
+  replication {
+    auto {}
+  }
+}
+
 resource "google_secret_manager_secret" "patient_registry_migration_database_url" {
   project   = var.project_id
   secret_id = "patient-registry-migration-database-url"

@@ -15,7 +15,7 @@ from services.bed_allocation.clients.grpc_clients import (
 )
 from services.bed_allocation.db import get_engine
 from services.bed_allocation.outbox.dispatcher import OutboxDispatcher, OutboxWorker
-from services.bed_allocation.outbox.publishers import build_event_publisher_from_env
+from services.bed_allocation.outbox.publishers import build_event_publisher_from_env, enabled_destinations_from_env
 from services.bed_allocation.rest import router as allocation_router, set_service
 from services.bed_allocation.service import BedAllocationDomainService
 from shared.config.runtime import ConfigError, bounded_int, runtime_profile, validate_cloud_runtime
@@ -34,7 +34,9 @@ def _required_setting(name: str) -> str:
 
 def build_app(database_url: str = None, clients: dict | None = None, event_publisher=None) -> FastAPI:
     endpoints = ["LOCK_SERVICE_ADDR", "BED_SERVICE_ADDR", "STAFF_SERVICE_ADDR", "TRIAGE_SERVICE_ADDR", "PATIENT_SERVICE_URL"]
-    if os.environ.get("ENABLE_OUTBOX_WORKER", "false").lower() == "true":
+    outbox_enabled = os.environ.get("ENABLE_OUTBOX_WORKER", "false").lower() == "true"
+    destinations = enabled_destinations_from_env() if outbox_enabled else ()
+    if "kafka" in destinations:
         endpoints.append("KAFKA_BOOTSTRAP_SERVERS")
     profile = validate_cloud_runtime(endpoints)
     # Demo controls (pause_ms, lock=false) and disabled renewal exist only for explicit demos.
@@ -86,7 +88,10 @@ def build_app(database_url: str = None, clients: dict | None = None, event_publi
     set_service(domain_service)
 
     outbox_worker = None
-    if os.environ.get("ENABLE_OUTBOX_WORKER", "false").lower() == "true":
+    if outbox_enabled:
+        if "kafka" not in destinations:
+            logger.warning("Kafka outbox delivery is disabled (OUTBOX_DESTINATIONS=pubsub): bed-events rows are "
+                           "kept PENDING and delivered in order once Kafka is enabled")
         # Fail at startup on missing broker configuration; never publish to an in-memory stand-in.
         publisher = event_publisher if event_publisher is not None else build_event_publisher_from_env()
         dispatcher = OutboxDispatcher(
@@ -95,6 +100,7 @@ def build_app(database_url: str = None, clients: dict | None = None, event_publi
             claim_seconds=int(os.environ.get("OUTBOX_CLAIM_SECONDS", "30")),
             max_attempts=int(os.environ.get("OUTBOX_MAX_ATTEMPTS", "12")),
             max_backoff_seconds=int(os.environ.get("OUTBOX_MAX_BACKOFF_SECONDS", "300")),
+            destinations=destinations,
         )
         outbox_worker = OutboxWorker(dispatcher, poll_seconds=float(os.environ.get("OUTBOX_POLL_SECONDS", "1")))
 

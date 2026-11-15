@@ -1,0 +1,28 @@
+# Services without a PodMonitoring in their own overlay (Allocation/Triage and Lock/ZooKeeper have theirs).
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata: {name: patient-registry}
+spec:
+  selector: {matchLabels: {app: patient-registry}}
+  endpoints: [{port: http, path: /metrics, interval: 60s}]
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata: {name: staff-scheduler}
+spec:
+  selector: {matchLabels: {app: staff-scheduler}}
+  endpoints: [{port: http, path: /metrics, interval: 60s}]
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata: {name: bed-registry}
+spec:
+  selector: {matchLabels: {app: bed-registry-service}}
+  endpoints: [{port: http-rest, path: /metrics, interval: 60s}]
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata: {name: resource-analytics}
+spec:
+  selector: {matchLabels: {app: resource-analytics-service}}
+  endpoints: [{port: http-rest, path: /metrics, interval: 60s}]
