@@ -34,13 +34,18 @@ resource "google_dataproc_cluster" "flink_cluster" {
 
     # Single-node cluster by default (worker_count = 0): 2 vCPU, so two GKE e2-standard-4 nodes + Dataproc fit
     # the project's 12-vCPU global quota. Changing the worker count replaces the cluster.
+    # With 0 workers Dataproc stores no worker machine type or disk, so they are set only when workers exist
+    # (otherwise every plan sees them as new and replaces the cluster).
     worker_config {
       num_instances = var.worker_count
-      machine_type  = var.machine_type
+      machine_type  = var.worker_count > 0 ? var.machine_type : null
 
-      disk_config {
-        boot_disk_type    = "pd-standard"
-        boot_disk_size_gb = 50
+      dynamic "disk_config" {
+        for_each = var.worker_count > 0 ? [1] : []
+        content {
+          boot_disk_type    = "pd-standard"
+          boot_disk_size_gb = 50
+        }
       }
     }
 

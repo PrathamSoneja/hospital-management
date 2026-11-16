@@ -86,7 +86,8 @@ resource "google_container_cluster" "main" {
     # SYSTEM_COMPONENTS plus only the packages the Grafana dashboard queries: kube_deployment_* (DEPLOYMENT),
     # kube_horizontalpodautoscaler_* (HPA), kube_pod_container_status_restarts_total (POD),
     # container_cpu_usage_seconds_total / container_memory_working_set_bytes (CADVISOR).
-    enable_components = ["SYSTEM_COMPONENTS", "DEPLOYMENT", "HPA", "POD", "CADVISOR"]
+    # Same order as the GKE API returns them, so plans show no reordering diff.
+    enable_components = ["SYSTEM_COMPONENTS", "HPA", "POD", "DEPLOYMENT", "CADVISOR"]
 
     managed_prometheus {
       enabled = true
