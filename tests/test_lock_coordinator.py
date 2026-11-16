@@ -1,4 +1,5 @@
 """Integration tests for the Lock Coordinator against a real ZooKeeper."""
+import logging
 import os
 import threading
 import time
@@ -371,3 +372,24 @@ def test_release_of_an_expired_but_unreaped_lock_returns_true(hosts):
         assert zk_store.release(zk, path, "alice")
     finally:
         zk.stop()
+
+def test_grants_timeouts_and_releases_are_logged_with_the_fencing_token(replica):
+    records = []
+    handler = logging.Handler()
+    handler.emit = records.append  # Keep every record the Coordinator logs during this test.
+    coordinator_logger = logging.getLogger("lock-coordinator")
+    coordinator_logger.addHandler(handler)
+    try:
+        lease = replica.client.acquire(POOL, "alice", "req-1", 60000, 1000)
+        with pytest.raises(AppException):
+            replica.client.acquire(POOL, "bob", "req-2", 60000, 100)
+        replica.client.release(lease.lock_id, "alice")
+    finally:
+        coordinator_logger.removeHandler(handler)
+
+    events = [(getattr(r, "event", None), getattr(r, "pool_id", None)) for r in records]
+    assert ("lock_granted", POOL) in events
+    assert ("lock_wait_timeout", POOL) in events
+    assert ("lock_released", POOL) in events
+    granted = next(r for r in records if getattr(r, "event", None) == "lock_granted")
+    assert f"token={lease.fencing_token}" in granted.getMessage()
