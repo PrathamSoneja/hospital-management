@@ -113,24 +113,23 @@ output "patient_registry_migration_gsa" {
   value       = module.iam.patient_registry_migration_gsa
 }
 
-# TEMPORARY: Confluent outputs disabled while Confluent Cloud is excluded
-# from the initial GCP-only deployment.
+# Confluent Cloud Kafka outputs (requirement e).
 
-# output "confluent_cluster_id" {
-#   description = "Confluent Cloud Kafka cluster ID."
-#   value       = module.confluent.cluster_id
-# }
+output "confluent_cluster_id" {
+  description = "Confluent Cloud Kafka cluster ID."
+  value       = module.confluent.cluster_id
+}
 
-# output "confluent_bootstrap_endpoint" {
-#   description = "Kafka bootstrap endpoint."
-#   value       = module.confluent.bootstrap_endpoint
-# }
+output "confluent_bootstrap_endpoint" {
+  description = "Kafka bootstrap endpoint."
+  value       = module.confluent.bootstrap_endpoint
+}
 
-# output "confluent_runtime_credentials" {
-#   description = "Sensitive Kafka credentials for Bed Allocation and Resource Analytics. Store as Kubernetes secrets through the approved secret workflow."
-#   value       = module.confluent.runtime_credentials
-#   sensitive   = true
-# }
+output "confluent_runtime_credentials" {
+  description = "Sensitive Kafka credentials for Bed Allocation and Resource Analytics. Store as Kubernetes secrets through the approved secret workflow."
+  value       = module.confluent.runtime_credentials
+  sensitive   = true
+}
 
 output "notification_topic_id" {
   description = "Pub/Sub topic ID consumed by Eventarc for the notification service."

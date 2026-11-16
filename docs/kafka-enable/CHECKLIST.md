@@ -27,7 +27,10 @@ Fixes made to the Flink job (each would have broken requirement e):
 5. The submit script used a wrong project and bucket and uploaded the SQL **with credentials** to GCS. It now reads
    them from Secret Manager into memory and pipes the rendered SQL over IAP SSH into a 0600 temp file that is shredded.
 
-## Day-2 steps (each needs approval)
+## Steps (each needs approval)
+
+Branch `feature/kafka-confluent` (from `release/gcp-only`) already has the patch applied (step 3). Run the base
+Terraform apply from `release/gcp-only` first (`docs/COMPLETION-GUIDE.md` steps B and B2), then this one.
 
 1. **Capacity check.** Global vCPU quota 12: 2 GKE nodes (8) + single-node Dataproc (2) = 10. Never start the old
    3-node cluster next to 2 GKE nodes (14 > 12).
@@ -36,7 +39,7 @@ Fixes made to the Flink job (each would have broken requirement e):
    (never in Git): `confluent_cloud_api_key`, `confluent_cloud_api_secret` (or `TF_VAR_*`),
    `confluent_region = "asia-south1"` (same region as GKE; the default `us-central1` adds latency), and
    `flink_operator_members = ["user:<jay's account>"]`.
-3. **Apply the patch** on a branch: `git apply -p1 docs/kafka-enable/kafka-enable.patch`. It
+3. **Patch: done** on `feature/kafka-confluent` (`git apply -p1 docs/kafka-enable/kafka-enable.patch`). It
    - enables `module "confluent"` and its outputs (environment, Basic cluster, topics `bed-events` and
      `bed-stats` with 3 partitions, per-component service accounts and API keys);
    - writes the Allocation, Analytics and Flink credentials into Secret Manager
@@ -51,13 +54,14 @@ Fixes made to the Flink job (each would have broken requirement e):
    `SASL_SSL://`, and replace `PLACEHOLDER_KAFKA_BOOTSTRAP` in `k8s/overlays/staging/allocation.properties` and
    `k8s/resource-analytics/overlays/gke/kustomization.yaml`. The release gate (and CI) blocks until that is done.
 5. **Terraform (Ruchir).** `terraform plan -var-file staging.tfvars -out tfplan.bin`; expect Confluent resources,
-   4 secrets + 6 versions, 4 secret IAM members, 1 firewall, and the Dataproc replacement (2 → 0 workers).
+   4 secrets + 6 versions, 4 secret IAM members and 1 firewall. The Dataproc replacement (2 → 0 workers) appears
+   only if the base apply has not run yet.
    Review, then apply.
 6. **Connector jar (Jay).** Start Dataproc (`gcloud dataproc clusters start hospital-dataproc-flink --region=asia-south1`),
    read the Flink version on the master (`flink --version` via IAP SSH), stage the matching official
    `flink-sql-connector-kafka-<version>.jar` from Maven Central in `gs://hospital-flink-514618/jars/`, and
    record its SHA-1 against Maven Central's published checksum.
-7. **Merge and sync.** Merge the branch to `master`; ArgoCD syncs Allocation (outbox now delivers the backlog in
+7. **Merge and sync.** After step 4, CI on this branch passes the release gate. Merge it to `master` after PR #20; ArgoCD syncs Allocation (outbox now delivers the backlog in
    order), then sync `hospital-resource-analytics-staging`.
 8. **Submit Flink (Jay).**
    ```bash

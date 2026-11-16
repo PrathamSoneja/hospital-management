@@ -329,3 +329,9 @@ variable "bed_registry_migrator_db_password_version" {
   type    = number
   default = 1
 }
+
+variable "flink_operator_members" {
+  description = "IAM members (e.g. user:jay@example.com) allowed to read the Flink Kafka credentials when submitting the job."
+  type        = list(string)
+  default     = []
+}

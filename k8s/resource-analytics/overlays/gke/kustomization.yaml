@@ -1,11 +1,12 @@
 # GKE overlay for Resource Analytics (Argo CD path). Firestore (Native, (default)) stores pool_stats.
-# GCP-only phase: no KAFKA_BOOTSTRAP_SERVERS, so the consumer is not started and readiness depends
-# on Firestore only. With Kafka: add KAFKA_BOOTSTRAP_SERVERS and the SASL secrets here.
+# Kafka phase: consumes the Flink results topic bed-stats (KAFKA_INPUT_TOPIC in the base) with its own
+# credentials; readiness then also requires the consumer to be running.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: hospital-system
 resources:
   - ../../base
+  - secret-provider-class.yaml
 images:
   - name: resource-analytics
     newName: asia-south1-docker.pkg.dev/hospital-management-514618/hospital-repo/resource-analytics
@@ -19,6 +20,21 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value: {name: ANALYTICS_STORAGE_BACKEND, value: firestore}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: KAFKA_BOOTSTRAP_SERVERS, value: pkc-41p56.asia-south1.gcp.confluent.cloud:9092}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: KAFKA_SASL_USERNAME_FILE, value: /var/run/secrets/app/kafka-sasl-username}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: KAFKA_SASL_PASSWORD_FILE, value: /var/run/secrets/app/kafka-sasl-password}
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts
+        value: [{name: app-secrets, mountPath: /var/run/secrets/app, readOnly: true}]
+      - op: add
+        path: /spec/template/spec/volumes
+        value: [{name: app-secrets, csi: {driver: secrets-store-gke.csi.k8s.io, readOnly: true, volumeAttributes: {secretProviderClass: resource-analytics-secrets}}}]
   - target: {kind: ServiceAccount, name: resource-analytics-sa}
     patch: |-
       - op: replace

@@ -3,12 +3,13 @@ resource "confluent_environment" "main" {
 }
 
 resource "confluent_kafka_cluster" "main" {
-  display_name        = var.kafka_cluster_name
-  availability        = "SINGLE_ZONE"
-  cloud               = "GCP"
-  region              = var.region
-  deletion_protection = var.deletion_protection
-  basic {}
+  display_name = var.kafka_cluster_name
+  availability = "SINGLE_ZONE"
+  cloud        = "GCP"
+  region       = var.region
+  # Basic clusters on Confluent Cloud do not support deletion protection.
+  deletion_protection = false
+  standard {}
 
   environment {
     id = confluent_environment.main.id

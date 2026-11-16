@@ -108,3 +108,20 @@ resource "google_compute_firewall" "allow_gke_health_checks" {
     ports    = ["30000-32767"]
   }
 }
+
+resource "google_compute_firewall" "allow_iap_ssh" {
+  project   = var.project_id
+  name      = "${var.network_name}-allow-iap-ssh"
+  network   = google_compute_network.main.name
+  direction = "INGRESS"
+  priority  = 1000
+
+  source_ranges = [
+    "35.235.240.0/20"
+  ]
+
+  allow {
+    protocol = "tcp"
+    ports    = ["22"]
+  }
+}
