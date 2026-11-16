@@ -1,0 +1,17 @@
+# Triage logs for pool DEMO-C91B24
+## pod/triage-service-5f7fc86789-6cpwj
+## pod/triage-service-5f7fc86789-6sdvh
+{"timestamp": "2026-11-16T15:42:04.697008+00:00", "severity": "INFO", "service": "triage-service", "event": "coordinator_lease_acquired", "message": "coordinator_lease_acquired", "request_id": "req-f94121c816a4", "pool_id": "DEMO-C91B24"}
+{"timestamp": "2026-11-16T15:42:04.798005+00:00", "severity": "INFO", "service": "triage-service", "event": "triage_assessment_committed", "message": "triage_assessment_committed", "request_id": "req-f94121c816a4", "pool_id": "DEMO-C91B24"}
+{"timestamp": "2026-11-16T15:42:07.083343+00:00", "severity": "INFO", "service": "triage-service", "event": "coordinator_lease_acquired", "message": "coordinator_lease_acquired", "request_id": "req-4a875a68cafd", "pool_id": "DEMO-C91B24"}
+{"timestamp": "2026-11-16T15:42:07.168724+00:00", "severity": "INFO", "service": "triage-service", "event": "triage_assessment_committed", "message": "triage_assessment_committed", "request_id": "req-4a875a68cafd", "pool_id": "DEMO-C91B24"}
+{"timestamp": "2026-11-16T15:42:09.954940+00:00", "severity": "INFO", "service": "triage-service", "event": "coordinator_lease_acquired", "message": "coordinator_lease_acquired", "request_id": "req-bf1d9098ccd5", "pool_id": "DEMO-C91B24"}
+{"timestamp": "2026-11-16T15:42:10.079184+00:00", "severity": "INFO", "service": "triage-service", "event": "triage_assessment_committed", "message": "triage_assessment_committed", "request_id": "req-bf1d9098ccd5", "pool_id": "DEMO-C91B24"}
+{"timestamp": "2026-11-16T15:42:11.247596+00:00", "severity": "INFO", "service": "triage-service", "event": "triage_grpc_peek_next", "message": "triage_grpc_peek_next", "request_id": "req-66a36a029ced", "pool_id": "DEMO-C91B24"}
+{"timestamp": "2026-11-16T15:42:11.633724+00:00", "severity": "INFO", "service": "triage-service", "event": "triage_grpc_peek_next", "message": "triage_grpc_peek_next", "request_id": "req-5791e8e614e8", "pool_id": "DEMO-C91B24"}
+{"timestamp": "2026-11-16T15:42:11.972949+00:00", "severity": "INFO", "service": "triage-service", "event": "triage_grpc_peek_next", "message": "triage_grpc_peek_next", "request_id": "req-83f19366ed8b", "pool_id": "DEMO-C91B24"}
+{"timestamp": "2026-11-16T15:42:12.021353+00:00", "severity": "INFO", "service": "triage-service", "event": "triage_grpc_enqueue", "message": "triage_grpc_enqueue", "request_id": "req-83f19366ed8b", "pool_id": "DEMO-C91B24"}
+{"timestamp": "2026-11-16T15:42:14.066319+00:00", "severity": "INFO", "service": "triage-service", "event": "triage_waitlist_read", "message": "triage_waitlist_read", "request_id": "req-df390d273ae9", "pool_id": "DEMO-C91B24"}
+{"timestamp": "2026-11-16T15:42:15.162195+00:00", "severity": "INFO", "service": "triage-service", "event": "triage_grpc_peek_next", "message": "triage_grpc_peek_next", "request_id": "req-63d3f5620f54", "pool_id": "DEMO-C91B24"}
+{"timestamp": "2026-11-16T15:42:15.195867+00:00", "severity": "INFO", "service": "triage-service", "event": "triage_grpc_peek_next", "message": "triage_grpc_peek_next", "request_id": "req-63d3f5620f54", "pool_id": "DEMO-C91B24"}
+{"timestamp": "2026-11-16T15:42:15.452590+00:00", "severity": "INFO", "service": "triage-service", "event": "triage_grpc_remove_entry", "message": "triage_grpc_remove_entry", "request_id": "req-63d3f5620f54", "pool_id": "DEMO-C91B24"}

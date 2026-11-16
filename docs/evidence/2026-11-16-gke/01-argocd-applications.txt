@@ -1,0 +1,16 @@
+# kubectl -n argocd get applications (2026-11-16T15:42:40Z)
+NAME                                     SYNC STATUS   HEALTH STATUS
+hospital-allocation-migrations-staging   Synced        Healthy
+hospital-allocation-triage-staging       Synced        Healthy
+hospital-bed-registry-staging            Synced        Healthy
+hospital-demo-ui                         Synced        Healthy
+hospital-load-test                       OutOfSync     Healthy
+hospital-monitoring                      Synced        Healthy
+hospital-resource-analytics-staging      Synced        Healthy
+hospital-root                            OutOfSync     Healthy
+lock-coordinator                         Synced        Healthy
+patient-registry                         Synced        Healthy
+staff-scheduler                          Synced        Healthy
+
+# root Application source
+repo=https://github.com/PrathamSoneja/hospital-management.git revision=master path=gitops/apps automated-prune=true

@@ -1,5 +1,10 @@
 # Kafka → Flink → results topic (requirement e) — enable checklist
 
+> **Status 2026-11-16:** steps 1–5 and 7 are done (Confluent Standard cluster `pkc-41p56` in GCP asia-south1, topics,
+> per-component keys in Secret Manager, IAP SSH firewall, PR #22 merged and synced; outbox backlog 0). Remaining:
+> step 6 (connector jar; Dataproc image 2.1 ships Flink 1.15, so `flink-sql-connector-kafka-1.15.4.jar`) and step 8
+> (submit), then the verification table.
+
 Owners: **Jay** (Flink, Analytics), **Ruchir** (Confluent provisioning, Terraform). Mandatory for submission.
 Nothing here is active until the steps below are approved and run. Today's Pub/Sub-only deployment keeps
 working independently: Allocation writes `bed-events` outbox rows that stay `PENDING`.

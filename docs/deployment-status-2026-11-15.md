@@ -1,5 +1,7 @@
 # Live deployment report — hospital-management on GCP (Confluent excluded) — 2026-11-15
 
+> **SUPERSEDED** by `deployment-status-2026-11-16.md` (everything is now deployed through Argo CD). Kept as history.
+
 Project `hospital-management-514618` · cluster `hospital-gke` (zonal, `--location=asia-south1-a`) · namespace
 `hospital-system`. **Snapshot of 2026-11-15.** The release changes described here were merged to `master` in
 PR #18 (`ff5cdc9`). At the time of this snapshot no Argo CD Application was registered, so **no GKE service was
