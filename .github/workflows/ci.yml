@@ -79,10 +79,11 @@ jobs:
 
       - name: Start sandbox infrastructure
         run: |
-          # The sandbox binds fixed ports 42181-49092 (tests/sandbox/cli.py, compose.yaml), inside Linux's
-          # ephemeral range. Reserve them so no outbound connection or free_port() test server can hold one
-          # (a run failed with "Address already in use" on 47080).
-          sudo sysctl -w net.ipv4.ip_local_reserved_ports=42000-49999
+          # The sandbox binds fixed ports 42181-49092 (tests/sandbox/cli.py, compose.yaml), inside Linux's default
+          # ephemeral range (32768-60999), so an outbound socket or a free_port() test server could hold one (a run
+          # failed with "Address already in use" on 47080). Move the ephemeral range above them instead of reserving
+          # a block inside it: a reserved block makes bind(0) fall through to the same next free port repeatedly.
+          sudo sysctl -w net.ipv4.ip_local_port_range="50000 65000"
           python -m tests.sandbox.cli infra-up
 
       - name: Full test suite (integration required; any skip fails)
