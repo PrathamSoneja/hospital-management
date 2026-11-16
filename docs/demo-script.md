@@ -20,13 +20,15 @@ Use a fresh pool ID each run, e.g. `DEMO-ICU-<time>`.
 
 ## 1. Platform: Ruchir (IaC, GitOps; Patient Registry, Staff Scheduler)
 
-1. `infra/terraform`: modules for the VPC, GKE, Cloud SQL, Firestore, GCS, Pub/Sub, Eventarc, Cloud Run, IAM and
+1. `infra/terraform`: modules for the VPC, GKE, Cloud SQL, Firestore, GCS, Pub/Sub, Eventarc, Cloud Run functions, IAM and
    Dataproc. Show `terraform state list | head` from the authoritative state.
 2. Argo CD UI or `kubectl -n argocd get applications`: every service comes from Git `master`; there is no `kubectl apply`.
 3. Demo console step 1, "Create beds + on-shift nurse": Staff Scheduler (Firestore) gets a nurse with a shift.
 4. Step 2, "Admit synthetic patient": Patient Registry writes to Cloud SQL and returns an admission ID.
    Expected: the status strip shows all services green.
-5. Public URL: `curl http://<ingress-ip>/healthz` returns `{"status":"ok"}`; any other path returns 404.
+5. Public URL: open `http://<ingress-ip>/docs` in a browser. Create a synthetic patient (`POST /api/v1/patients`
+   with `first_name`, `last_name`, `date_of_birth`), read it back (`GET /api/v1/patients/{id}`) and open an admission
+   (`POST /api/v1/admissions`). `/healthz` returns `{"status":"ok"}`; `/metrics` returns 404.
 
 ## 2. Allocation and scaling: Pratham (Bed Allocation, Triage; HPA, observability)
 
@@ -48,7 +50,7 @@ Use a fresh pool ID each run, e.g. `DEMO-ICU-<time>`.
    `kubectl -n hospital-system get pods -l app=lock-coordinator` shows 2 replicas.
 2. During the concurrent allocation: the Lock Coordinator logs show queued acquires with increasing fencing tokens.
    Grafana: "Lock Coordinator: acquire outcomes".
-3. Notification: Cloud Run → `hospital-notification` → Logs show `staff_notification` lines for each allocation
+3. Notification: Cloud Run functions → `hospital-notification-fn` → Logs show `staff_notification` lines for each allocation
    and release. Explain Pub/Sub → Eventarc, event-ID dedup, and the DLQ after 10 attempts.
 
 ## 4. Data and analytics: Jay (Bed Registry; Resource Analytics + Flink)

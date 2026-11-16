@@ -27,7 +27,7 @@ flowchart LR
     GCS[(GCS: patient docs, Flink artifacts)]
     PS[[Pub/Sub bed-notifications<br/>+ DLQ]]
     EA[Eventarc trigger]
-    CR[Cloud Run: Notification]
+    CR[Cloud Run function:<br/>Notification]
     DP[Dataproc Flink<br/>single node · deferred]
     SM[Secret Manager]
     AR[Artifact Registry]
@@ -81,10 +81,10 @@ sequenceDiagram
 
 | Service | Owner | Exposes | Calls | Storage |
 |---|---|---|---|---|
-| Patient Registry | Ruchir | REST :8000 (public `GET /healthz` only) | — | Cloud SQL `patients`, GCS |
+| Patient Registry | Ruchir | REST :8000 (public: `/api/v1`, `/docs`, `/healthz`) | — | Cloud SQL `patients`, GCS |
 | Staff Scheduler | Ruchir | REST :8000, gRPC :50051 | — | Firestore |
 | Lock Coordinator | Nisarg | gRPC :50051, REST :8000 | ZooKeeper :2181 | ZooKeeper PVCs |
-| Notification | Nisarg | Cloud Run `POST /` (Eventarc push) | — | Firestore (dedup, gaps) |
+| Notification | Nisarg | Cloud Run function `hospital-notification-fn` (Eventarc on Pub/Sub `bed-notifications`) | — | Firestore (dedup, gaps) |
 | Bed Registry | Jay | REST :8000, gRPC :50053 | — | Cloud SQL `beds` |
 | Resource Analytics | Jay | REST :8008 | Kafka `bed-stats` (deferred) | Firestore `pool_stats` |
 | Bed Allocation | Pratham | REST :8000 | PR (REST); Triage, Lock, Bed, Staff (gRPC); Pub/Sub; Kafka (deferred) | Cloud SQL `allocations` |
@@ -104,15 +104,16 @@ message queues (Pub/Sub now; Kafka for analytics).
    creates tables at startup in GKE.
 4. **Observability.** Prometheus is Google Managed Service for Prometheus (PodMonitoring, 60 s scrape).
    Grafana runs in-cluster (private) through the GMP query frontend. Logs go to Cloud Logging (GKE workload
-   logging, Cloud Run, Dataproc).
+   logging, the Cloud Run function, Dataproc).
 5. **Access.** The control plane is reached through the IAM-gated GKE DNS endpoint. The public IP allowlist holds
    two shared WARP addresses and should be removed once everyone uses the DNS endpoint.
-6. **Public URL.** Health-only today. The read-only availability endpoint and HTTPS are proposed in
-   `docs/proposals/public-endpoint-https.md`.
+6. **Public URL.** Patient Registry is the public web service over plain HTTP: its REST API (`/api/v1`), the
+   interactive `/docs` page and `/healthz`. `/metrics` and `/readyz` are not routed. Synthetic data only; HTTPS is
+   optional (`docs/proposals/public-endpoint-https.md`).
 7. **Demo UI.** A private console (`services/demo_ui`), not a ninth business service. It calls an allowlist of the
    real APIs.
-8. **Requirement (b).** Notification is a Cloud Run service. A conversion to a Cloud Run function is pending
-   Nisarg's review (`docs/proposals/serverless-function-handoff.md`).
+8. **Requirement (b).** Notification is a Cloud Run function (2nd gen, `hospital-notification-fn`, PR #19), triggered
+   through Eventarc by Pub/Sub `bed-notifications`, with `bed-notifications-dlq` after 10 attempts.
 
 ## 5. Design rationale (short form; the full text is in the design document)
 

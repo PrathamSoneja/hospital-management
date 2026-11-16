@@ -1,6 +1,6 @@
 # Completion guide: from this branch to a submission-ready, demo-ready project
 
-Branch `release/gcp-only` (commit `c904760` plus the uncommitted changes listed in §4). Nothing in this branch is
+Branch `release/gcp-only` (PR #20, which includes `master` up to PR #19; contents in §5). Nothing in this branch is
 deployed until it is merged to `master` and synced by Argo CD. Detail lives in the linked documents; this page is
 the order of work.
 
@@ -9,13 +9,13 @@ the order of work.
 | Req | What the brief needs | Status today | What closes it |
 |---|---|---|---|
 | ≥8 services | 8 microservices | Code + images ready (8 + demo UI); only Notification live | Steps B–E |
-| Public URL | a web service by public URL | Health-only Ingress prepared; not live | Step E; meaningful endpoint + HTTPS: step H |
+| Public URL | a web service by public URL | Patient Registry: Ingress routes `/api/v1`, `/docs`, `/healthz`; not live | Step E; optional HTTPS: step H |
 | a | all infra via IaC | Applied by Ruchir; this branch adds Bed Registry DB, monitoring IAM, node cap, single-node Dataproc | Step B |
-| b | serverless async function | Cloud Run service via Eventarc; **pending Nisarg** | Step I |
+| b | serverless async function | Cloud Run function `hospital-notification-fn` (PR #19) on Pub/Sub via Eventarc; not applied | Steps B, I |
 | b | REST + gRPC + MQ | REST/gRPC/Pub/Sub verified locally; Kafka phase 2 | Steps E, G |
 | c | GKE stateless + 2 HPAs + load test | HPAs, in-cluster k6 Job ready (seeded run passed locally) | Steps E, F |
 | d | GitOps only | Argo CD installed; 0 Applications | Steps D–E |
-| e | Flink on Dataproc, Kafka in → window → results topic | Job fixed, enable patch ready; **Confluent tomorrow** | Step G |
+| e | Flink on Dataproc, Kafka in → window → results topic | Job fixed, patch applied on `feature/kafka-confluent`; **Confluent free trial today** | Step G |
 | f | ZooKeeper concept implemented + demoed | Verified locally with the real Lock Coordinator | Steps E–F |
 | g | 3 storage products, real use | Cloud SQL, Firestore, GCS provisioned; use verified locally | Step F |
 | h | Prometheus/Grafana dashboards, central logs incl. analytics | GMP + Grafana manifests ready; packages in Terraform | Steps B, E, F |
@@ -23,7 +23,8 @@ the order of work.
 
 ## 2. Steps in order
 
-**A. Pratham — commit and push this branch (now).** Review the changes in §5, commit to `release/gcp-only`, push.
+**A. Pratham — push `release/gcp-only` (PR #20).** Master is merged in, the CI conflict is resolved, the public
+Ingress is widened and `temp_*.txt` are removed (§5).
 CI should now pass the "Render, schema-validate and release-gate every Argo CD path" step, which passed locally.
 Docs under `docs/` are tracked normally now (the blanket `docs/*.md` ignore rule was removed).
 
@@ -58,10 +59,21 @@ Expected:
 Apply in the same window (`terraform apply tfplan.bin`), then
 `Remove-Item Env:TF_VAR_bed_registry_*; Remove-Item tfplan.bin`.
 
+**B2. Ruchir — Notification function cut-over (PR #19, two applies).**
+- Remove `notification_image` from `staging.tfvars`; the variable no longer exists.
+- The step B apply runs with `eventarc_subscription_id = ""`. It creates `hospital-notification-fn` with its own
+  Eventarc trigger and removes the old Cloud Run service and its trigger.
+- Read the new trigger's subscription:
+  ```powershell
+  gcloud eventarc triggers describe <terraform output notification_function_trigger> --location asia-south1 --format="value(transport.pubsub.subscription)"
+  ```
+- Set `eventarc_subscription_id` to that value and apply again. This imports the subscription and adds the
+  dead-letter policy (`bed-notifications-dlq` after 10 attempts).
+
 **C. Ruchir — one SQL statement as `postgres`** (Cloud SQL Studio, database `beds`):
 `REVOKE cloudsqlsuperuser FROM bed_registry; ALTER ROLE bed_registry NOCREATEDB NOCREATEROLE;`
 
-**D. Team — merge to `master`** after CI is green and §3 S1–S2 are done. Remove `temp_*.txt` in the same merge (§3 S4).
+**D. Team — merge to `master`** after CI is green and §3 S1–S2 are done. Merge Nisarg's two PRs (lock logging; member-C docs) first. `temp_*.txt` are already removed in PR #20 (§3 S4).
 Rotation is required whether the repository is public or private: the files are in its history.
 
 **E. Pratham (with approval) — Argo CD deployment, in dependency order.**
@@ -76,7 +88,8 @@ Rotation is required whether the repository is public or private: the files are 
    `hospital-resource-analytics-staging` → `hospital-demo-ui`.
 
    For example: `kubectl -n argocd patch application <name> --type merge -p '{"operation":{"sync":{}}}'`
-3. Verify each app is Synced/Healthy, pods are Ready, and the public `/healthz` responds through the Ingress IP
+3. Verify each app is Synced/Healthy, pods are Ready, and the public URL responds through the Ingress IP
+   (`/healthz`, and `/docs` loads in a browser)
    (`kubectl -n hospital-system get ingress`).
 
 **F. Pratham (with approval) — live verification and evidence** (watch capacity, §3 S8; then §3 S7):
@@ -89,13 +102,15 @@ Rotation is required whether the repository is public or private: the files are 
 
 Save screenshots into `docs/evidence/`.
 
-**G. Jay + Ruchir — Kafka/Flink (tomorrow, after Confluent signup):** follow `docs/kafka-enable/CHECKLIST.md` end to end.
+**G. Jay + Ruchir + Pratham — Kafka/Flink (today, Confluent free trial):** the patch is already applied on branch
+`feature/kafka-confluent`. Follow `docs/kafka-enable/CHECKLIST.md` from step 2 (step 3 is done).
 
-**H. Optional, approval needed — meaningful public endpoint + HTTPS:** `docs/proposals/public-endpoint-https.md`
-(patch ready; needs a Bed Registry image rebuild, plus Terraform for the static IP).
+**H. Optional, approval needed — HTTPS for the public URL:** `docs/proposals/public-endpoint-https.md` §2 (needs a
+domain and a Terraform static IP). The availability-endpoint alternative in §1 was not chosen.
 
-**I. Nisarg — requirement (b):** decide using `docs/proposals/serverless-function-handoff.md` (ask the instructor,
-or convert to a Cloud Run function on a separate branch).
+**I. Nisarg — requirement (b) verification:** after step B2, run the checks in
+`docs/proposals/serverless-function-handoff.md` (event handled, duplicate skipped, malformed message acknowledged,
+DLQ after 10 attempts) and save the evidence.
 
 **J. Everyone — deliverables:**
 - **Design document:** export the diagrams from `docs/design-as-built.md` (mermaid.live → PNG). Add §4
@@ -164,9 +179,7 @@ The key is invalid once it's deleted; confirm in the console that it no longer a
 - **Old plan files:** keep no `tfplan.bin` or `*.tfstate` copies outside the state bucket.
 
 **S4. Repository.**
-- **Remove the files:** they are still tracked on `release/gcp-only`. In `../hm-release` (sparse checkout, so the
-  files are not on disk) run `git rm --sparse temp_db.txt temp_key.txt temp_secret.txt` before the merge (step D);
-  in a normal checkout, use plain `git rm`. The values stay in
+- **Remove the files:** done in PR #20 (`git rm --sparse temp_db.txt temp_key.txt temp_secret.txt`). The values stay in
   the history of `42fb8e6`; rotation (S1–S2) is what neutralises them.
 - **Rewriting history** (`git filter-repo`, then a force-push, after which every clone must re-clone) is a
   separate team decision, not needed once S1–S2 are done.
@@ -237,10 +250,14 @@ If pods stay Pending, stop the test and report the shortfall. Do not add a third
 About $14–17/day while everything runs (2 nodes, Cloud SQL, NAT, load balancer). Check *Billing → Credits* (remaining
 value and expiry) before Step E. Run the system only for testing and demo windows; Step K stops most of the cost.
 
-## 5. Local changes in this branch since `c904760` (uncommitted)
+## 5. Changes in PR #20 since `c904760`
 
 | Area | Files |
 |---|---|
+| Merge of `master` | PR #19 (Notification as a Cloud Run function); the CI publish job no longer builds a Notification image |
+| Public URL | `k8s/overlays/gke/patient-registry/public-ingress.yaml` routes `/api/v1`, `/docs`, `/openapi.json`, `/healthz` |
+| Leaked files | `temp_db.txt`, `temp_key.txt`, `temp_secret.txt` removed (rotation in §3 is still required) |
+| CI publishing | `scripts/pin_image_digest.py`, `tests/test_pin_image_digest.py` |
 | CI fix | `.github/workflows/ci.yml` (render + kubeconform + release gate for every Argo CD path; the gate must pass) |
 | Demo UI | `services/demo_ui/{main.py,static/index.html,Dockerfile,__init__.py}`, `k8s/demo-ui/*`, `gitops/apps/demo-ui.yaml`, `tests/test_demo_ui.py`; image `demo-ui@sha256:0787f2c8…f9c2` |
 | Load test | `k6/sustained-multi-pool.js` (optional setup seeding), `k6/kustomization.yaml`, `k6/load-test-job.yaml`, `gitops/apps/load-test.yaml` |

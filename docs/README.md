@@ -13,8 +13,8 @@
 | [`decisions.md`](decisions.md) | Architecture decisions and defaults | everyone |
 | [`deployment-status-2026-11-15.md`](deployment-status-2026-11-15.md) | Snapshot of the GCP inventory, linkage map and cost on 2026-11-15 | Ruchir, Pratham |
 | [`kafka-enable/CHECKLIST.md`](kafka-enable/CHECKLIST.md) + [`kafka-enable.patch`](kafka-enable/kafka-enable.patch) | Requirement (e): Confluent, Kafka, Flink, results topic | Jay, Ruchir |
-| [`proposals/serverless-function-handoff.md`](proposals/serverless-function-handoff.md) | Requirement (b): Notification as a Cloud Run function | Nisarg |
-| [`proposals/public-endpoint-https.md`](proposals/public-endpoint-https.md) + [`public-availability-endpoint.patch`](proposals/public-availability-endpoint.patch) | Public web service endpoint and HTTPS | Jay, Ruchir |
+| [`proposals/serverless-function-handoff.md`](proposals/serverless-function-handoff.md) | Requirement (b): Notification as a Cloud Run function (implemented in PR #19); verification checks | Nisarg |
+| [`proposals/public-endpoint-https.md`](proposals/public-endpoint-https.md) + [`public-availability-endpoint.patch`](proposals/public-availability-endpoint.patch) | Optional HTTPS for the public URL (§2). The availability endpoint (§1 and its patch) was not chosen | Ruchir |
 | [`member_d_demo_runbook.md`](member_d_demo_runbook.md), [`member_d_viva_qa.md`](member_d_viva_qa.md) | Member D demo and viva preparation | Jay |
 | [`../task_divison.txt`](../task_divison.txt) | Deliverable: IDs, names, tasks (the brief's exact filename) | everyone |
 
