@@ -18,60 +18,137 @@ resource "google_service_account" "notification" {
   display_name = "Cloud Run notification handler"
 }
 
-resource "google_cloud_run_v2_service" "notification" {
-  project             = var.project_id
-  name                = "${var.name_prefix}-notification"
-  location            = var.region
-  deletion_protection = var.deletion_protection
-  ingress             = "INGRESS_TRAFFIC_INTERNAL_ONLY"
-
-  template {
-    service_account = google_service_account.notification.email
-
-    scaling {
-      min_instance_count = 0
-      max_instance_count = 3
-    }
-
-    containers {
-      image = var.notification_image
-
-      ports {
-        container_port = 8080
-      }
-
-
-      env {
-        name  = "FIRESTORE_PROJECT_ID"
-        value = var.project_id
-      }
-
-      resources {
-        limits = {
-          cpu    = "1"
-          memory = "512Mi"
-        }
-      }
-    }
-
-  }
-
-  depends_on = [google_project_iam_member.notification_firestore]
-}
-
+# Lets the function deduplicate on event_id and track stream_sequence in Firestore.
 resource "google_project_iam_member" "notification_firestore" {
   project = var.project_id
   role    = "roles/datastore.user"
   member  = "serviceAccount:${google_service_account.notification.email}"
 }
 
-# Duplicate removed: notification_firestore IAM binding already declared above.
-# resource "google_project_iam_member" "notification_firestore" {
-#   project = var.project_id
-#   role    = "roles/datastore.user"
-#   member  = "serviceAccount:${google_service_account.notification.email}"
-# }
+# ---------------------------------------------------------------------------
+# Notification as a serverless function (requirement b): Cloud Run functions (2nd gen).
+# Eventarc delivers each Pub/Sub message on bed-notifications as a CloudEvent to
+# services/notification/function.py:handle_bed_notification. Built from source; no image to publish.
+# ---------------------------------------------------------------------------
 
+locals {
+  repo_root = "${path.module}/../../../.."
+
+  # Everything the function imports, at the same paths as in the repository. The repo uses
+  # namespace packages, so missing __init__.py files are added to the zip as empty files.
+  function_files = [
+    "services/__init__.py",
+    "services/notification/__init__.py",
+    "services/notification/function.py",
+    "services/notification/handler.py",
+    "services/notification/store.py",
+    "shared/__init__.py",
+    "shared/observability/__init__.py",
+    "shared/observability/logging.py",
+    "contracts/events/notification.schema.json",
+  ]
+}
+
+data "archive_file" "notification_function" {
+  type        = "zip"
+  output_path = "${path.module}/.build/notification-function.zip"
+
+  # Cloud Run functions (Python) load the entry point from main.py at the source root.
+  source {
+    filename = "main.py"
+    content  = "from services.notification.function import handle_bed_notification  # noqa: F401\n"
+  }
+
+  source {
+    filename = "requirements.txt"
+    content  = file("${local.repo_root}/services/notification/function-requirements.txt")
+  }
+
+  dynamic "source" {
+    for_each = toset(local.function_files)
+    content {
+      filename = source.value
+      content  = fileexists("${local.repo_root}/${source.value}") ? file("${local.repo_root}/${source.value}") : ""
+    }
+  }
+}
+
+resource "google_storage_bucket" "function_source" {
+  project                     = var.project_id
+  name                        = "${var.project_id}-notification-fn-source"
+  location                    = var.region
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+  force_destroy               = true # Holds only build zips, which Terraform recreates.
+}
+
+# The object name changes with the code, so a code change redeploys the function.
+resource "google_storage_bucket_object" "function_source" {
+  name   = "notification-function-${data.archive_file.notification_function.output_md5}.zip"
+  bucket = google_storage_bucket.function_source.name
+  source = data.archive_file.notification_function.output_path
+}
+
+# Cloud Build builds the function with this account instead of the project's default compute account.
+resource "google_service_account" "function_build" {
+  project      = var.project_id
+  account_id   = trimsuffix(substr("${var.name_prefix}-notif-build", 0, 30), "-")
+  display_name = "Builds the notification function"
+}
+
+resource "google_project_iam_member" "function_build" {
+  project = var.project_id
+  role    = "roles/run.builder"
+  member  = "serviceAccount:${google_service_account.function_build.email}"
+}
+
+resource "google_cloudfunctions2_function" "notification" {
+  project  = var.project_id
+  name     = "${var.name_prefix}-notification-fn"
+  location = var.region
+
+  build_config {
+    runtime         = "python311"
+    entry_point     = "handle_bed_notification"
+    service_account = google_service_account.function_build.id
+
+    source {
+      storage_source {
+        bucket = google_storage_bucket.function_source.name
+        object = google_storage_bucket_object.function_source.name
+      }
+    }
+  }
+
+  service_config {
+    min_instance_count    = 0
+    max_instance_count    = 3
+    available_memory      = "512Mi"
+    timeout_seconds       = 60
+    ingress_settings      = "ALLOW_INTERNAL_ONLY"
+    service_account_email = google_service_account.notification.email
+
+    environment_variables = {
+      FIRESTORE_PROJECT_ID = var.project_id
+    }
+  }
+
+  # Eventarc trigger on bed-notifications. Failures are retried; after 10 attempts the
+  # imported subscription below moves the message to bed-notifications-dlq.
+  event_trigger {
+    trigger_region        = var.region
+    event_type            = "google.cloud.pubsub.topic.v1.messagePublished"
+    pubsub_topic          = google_pubsub_topic.notifications.id
+    retry_policy          = "RETRY_POLICY_RETRY"
+    service_account_email = google_service_account.eventarc.email
+  }
+
+  depends_on = [
+    google_project_iam_member.notification_firestore,
+    google_project_iam_member.function_build,
+    google_project_iam_member.eventarc_receiver,
+  ]
+}
 
 resource "google_service_account" "eventarc" {
   project      = var.project_id
@@ -85,61 +162,30 @@ resource "google_project_iam_member" "eventarc_receiver" {
   member  = "serviceAccount:${google_service_account.eventarc.email}"
 }
 
+# A 2nd gen function runs as a Cloud Run service; Eventarc needs Cloud Run Invoker on it.
 resource "google_cloud_run_v2_service_iam_member" "eventarc_invoker" {
   project  = var.project_id
-  location = google_cloud_run_v2_service.notification.location
-  name     = google_cloud_run_v2_service.notification.name
+  location = var.region
+  name     = google_cloudfunctions2_function.notification.service_config[0].service
   role     = "roles/run.invoker"
   member   = "serviceAccount:${google_service_account.eventarc.email}"
 }
 
-resource "google_eventarc_trigger" "notifications" {
-  project         = var.project_id
-  name            = "${var.name_prefix}-notification-pubsub"
-  location        = var.region
-  service_account = google_service_account.eventarc.email
-
-  matching_criteria {
-    attribute = "type"
-    value     = "google.cloud.pubsub.topic.v1.messagePublished"
-  }
-
-  destination {
-    cloud_run_service {
-      service = google_cloud_run_v2_service.notification.name
-      region  = google_cloud_run_v2_service.notification.location
-    }
-  }
-
-  transport {
-    pubsub {
-      topic = google_pubsub_topic.notifications.id
-    }
-  }
-
-  depends_on = [
-    google_project_iam_member.eventarc_receiver,
-    google_cloud_run_v2_service_iam_member.eventarc_invoker,
-  ]
-}
-
 locals {
-  eventarc_subscription_id   = google_eventarc_trigger.notifications.transport[0].pubsub[0].subscription
-  eventarc_subscription_name = basename(local.eventarc_subscription_id)
-  pubsub_service_agent       = "service-${data.google_project.current.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+  pubsub_service_agent = "service-${data.google_project.current.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
 }
 
-# Eventarc creates and owns its transport subscription. Supply its full resource
-# name after the trigger exists; this import block then brings that subscription
-# under Terraform so its dead-letter policy can be managed without creating a
-# competing subscription.
+# The function's Eventarc trigger creates and owns its Pub/Sub subscription. After the first
+# apply, set eventarc_subscription_id to that subscription's full name (see the
+# notification_function_trigger output) and apply again: the import block then brings it under
+# Terraform so its dead-letter policy can be managed without creating a competing subscription.
 resource "google_pubsub_subscription" "eventarc" {
   for_each = var.eventarc_subscription_id == "" ? {} : {
     eventarc = var.eventarc_subscription_id
   }
 
   project = var.project_id
-  name    = local.eventarc_subscription_name
+  name    = basename(each.value)
   topic   = google_pubsub_topic.notifications.id
 
   dead_letter_policy {
@@ -167,17 +213,19 @@ resource "google_pubsub_topic_iam_member" "pubsub_dead_letter_publisher" {
   topic   = google_pubsub_topic.dead_letter.name
   role    = "roles/pubsub.publisher"
   member  = "serviceAccount:${local.pubsub_service_agent}"
-
-  depends_on = [google_eventarc_trigger.notifications]
 }
 
 resource "google_pubsub_subscription_iam_member" "pubsub_source_subscriber" {
+  for_each = var.eventarc_subscription_id == "" ? {} : {
+    eventarc = var.eventarc_subscription_id
+  }
+
   project      = var.project_id
-  subscription = local.eventarc_subscription_name
+  subscription = basename(each.value)
   role         = "roles/pubsub.subscriber"
   member       = "serviceAccount:${local.pubsub_service_agent}"
 
-  depends_on = [google_eventarc_trigger.notifications]
+  depends_on = [google_pubsub_subscription.eventarc]
 }
 
 resource "google_secret_manager_secret" "allocation_database_url" {
@@ -251,46 +299,3 @@ resource "google_secret_manager_secret" "patient_registry_migration_database_url
     auto {}
   }
 }
-
-data "google_project" "this" {
-  project_id = var.project_id
-}
-
-# Duplicate locals removed: pubsub_service_agent and eventarc_subscription are
-# now defined in the single locals block above.
-
-# locals {
-#   pubsub_service_agent  = "serviceAccount:service-${data.google_project.this.number}@gcp-sa-pubsub.iam.gserviceaccount.com"
-#   eventarc_subscription = google_eventarc_trigger.notifications.transport[0].pubsub[0].subscription
-# }
-
-# resource "google_pubsub_topic_iam_member" "dead_letter_publisher" {
-#   project = var.project_id
-#   topic   = google_pubsub_topic.dead_letter.name
-#   role    = "roles/pubsub.publisher"
-#   member  = local.pubsub_service_agent
-# }
-
-# resource "google_pubsub_subscription" "dead_letter_inspection" {
-#   project                    = var.project_id
-#   name                       = "${var.name_prefix}-bed-notifications-dlq-inspect"
-#   topic                      = google_pubsub_topic.dead_letter.id
-#   message_retention_duration = "604800s"
-#   ack_deadline_seconds       = 60
-# }
-
-# Duplicate DLQ mechanism removed.
-# The imported Eventarc subscription already configures dead_letter_policy.
-# resource "terraform_data" "notification_dead_letter_policy" {
-#   triggers_replace = [local.eventarc_subscription_id, google_pubsub_topic.dead_letter.id, var.dead_letter_max_attempts]
-#
-#   provisioner "local-exec" {
-#     command = "gcloud pubsub subscriptions update ${local.eventarc_subscription_id} --dead-letter-topic=${google_pubsub_topic.dead_letter.id} --max-delivery-attempts=${var.dead_letter_max_attempts} --min-retry-delay=10s --max-retry-delay=600s"
-#   }
-#
-#   provisioner "local-exec" {
-#     command = "gcloud pubsub subscriptions add-iam-policy-binding ${local.eventarc_subscription_id} --member=${local.pubsub_service_agent} --role=roles/pubsub.subscriber"
-#   }
-#
-#   depends_on = [google_pubsub_topic_iam_member.dead_letter_publisher]
-# }
