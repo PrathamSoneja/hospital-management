@@ -1,8 +1,10 @@
 # Required public URL (brief: "at least one web service accessible over public URL").
-# GKE external HTTP load balancer (ephemeral IP, plain HTTP). Until HTTPS and authentication exist, it routes
-# ONLY the read-only, non-sensitive GET /healthz of Patient Registry; every other path (all patient and
-# admission APIs, /readyz, /metrics, /docs) falls through to GKE's default backend and returns 404.
-# Delete this file (Argo CD prunes the Ingress and the load balancer) after the demo, with approval.
+# GKE external HTTP load balancer (ephemeral IP, plain HTTP) exposing Patient Registry as the public web service:
+#   /api/v1/*      patient, admission and document REST API (synthetic demo data only)
+#   /docs          FastAPI's interactive API page (it loads /openapi.json), so the API can be tried in a browser
+#   /healthz       liveness
+# /metrics and /readyz are not routed and fall through to GKE's default backend (404).
+# Delete this file (Argo CD prunes the Ingress and the load balancer) after grading, with approval.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -13,6 +15,24 @@ spec:
   rules:
     - http:
         paths:
+          - path: /api/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: patient-registry-service
+                port: {number: 8000}
+          - path: /docs
+            pathType: Prefix
+            backend:
+              service:
+                name: patient-registry-service
+                port: {number: 8000}
+          - path: /openapi.json
+            pathType: Exact
+            backend:
+              service:
+                name: patient-registry-service
+                port: {number: 8000}
           - path: /healthz
             pathType: Exact
             backend:

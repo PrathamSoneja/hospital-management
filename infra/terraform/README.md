@@ -9,7 +9,7 @@ This directory provisions the shared GCP foundation described in `cloud_proj_pla
 - A Firestore Native database, private patient-document and Flink buckets, and a Docker Artifact Registry repository.
 - GitHub Actions Workload Identity Federation restricted to one repository and branch, an Artifact Registry writer identity, and per-service GKE Workload Identity bindings with scoped Google Cloud IAM roles.
 - GKE Secret Manager CSI integration, Dataplane V2 NetworkPolicy enforcement, and managed Prometheus.
-- A Pub/Sub notification topic routed through Eventarc to a private Cloud Run service, plus Secret Manager secret containers and narrowly scoped workload IAM.
+- A Pub/Sub notification topic routed through Eventarc to a Cloud Run function (2nd gen), plus Secret Manager secret containers and narrowly scoped workload IAM.
 - A Confluent Cloud GCP Basic Kafka cluster, `bed-events` and `bed-stats` topics, and scoped runtime Kafka identities for Bed Allocation, Flink, and Resource Analytics.
 
 Kubernetes application workloads are not deployed by this Terraform stack. ArgoCD remains the deployment mechanism for workloads.
@@ -33,7 +33,7 @@ Run Terraform from `infra/terraform/bootstrap` first, supplying `project_id` and
 
 After the bucket exists, copy `backend.hcl.example` to `backend.hcl`, set its bucket name, and initialize the root stack from `infra/terraform` with that backend configuration and state migration enabled. The backend configuration file is intentionally not committed.
 
-For the root stack, supply `project_id`, `github_owner`, `github_repository`, `bucket_suffix`, `master_authorized_networks`, all five database password variables, and `notification_image` as Terraform variables. Prefer environment variables or your approved secret-injection mechanism for secrets; never commit credentials or populated `*.tfvars` files. The GCS backend bucket has uniform bucket-level access, public access prevention, and object versioning. Restrict its IAM access to Terraform operators.
+For the root stack, supply `project_id`, `github_owner`, `github_repository`, `bucket_suffix`, `master_authorized_networks`, and all five database password variables as Terraform variables. Prefer environment variables or your approved secret-injection mechanism for secrets; never commit credentials or populated `*.tfvars` files. The GCS backend bucket has uniform bucket-level access, public access prevention, and object versioning. Restrict its IAM access to Terraform operators.
 
 Patient Registry has separate `patient_registry` runtime and `patient_registry_migrator` database logins.
 Before the migration hook's first run, have a database owner grant `CONNECT` on `patients` to
@@ -50,7 +50,7 @@ Run `terraform fmt -recursive` from `infra/terraform`, then `terraform init`, `t
 
 The Confluent Terraform manager and application Kafka credentials are stored in Terraform state and marked sensitive in outputs. This Kafka architecture remains unchanged pending the Ruchir/Jay decision. Secure the GCS state bucket with least-privilege IAM; do not print or commit credential outputs.
 
-Terraform creates Secret Manager secret containers only, not secret values. Populate database URLs and Kafka credentials using the approved secret-management workflow before starting workloads. Before the first Alembic run, a database owner must grant `USAGE, CREATE` on the `public` schema to `allocation_migrator`; PostgreSQL does not expose this database grant through the Cloud SQL Terraform resource. Run the migrations using the migration URL. Objects created by Alembic are owned by `allocation_migrator`; revision `20261031_04` grants runtime DML on existing and future objects to `allocation_app`. The notification image must exist before applying the Cloud Run service.
+Terraform creates Secret Manager secret containers only, not secret values. Populate database URLs and Kafka credentials using the approved secret-management workflow before starting workloads. Before the first Alembic run, a database owner must grant `USAGE, CREATE` on the `public` schema to `allocation_migrator`; PostgreSQL does not expose this database grant through the Cloud SQL Terraform resource. Run the migrations using the migration URL. Objects created by Alembic are owned by `allocation_migrator`; revision `20261031_04` grants runtime DML on existing and future objects to `allocation_app`.
 
 The GitHub OIDC provider only accepts the configured repository and branch. The GitHub Actions service account has Artifact Registry write access but no GCP project-wide editor role. The runtime GKE service accounts are bound to their corresponding Kubernetes service accounts in `kubernetes_namespace`; keep those names in sync with GitOps manifests.
 

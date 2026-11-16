@@ -1,10 +1,9 @@
 # Live deployment report — hospital-management on GCP (Confluent excluded) — 2026-11-15
 
 Project `hospital-management-514618` · cluster `hospital-gke` (zonal, `--location=asia-south1-a`) · namespace
-`hospital-system`. Source for every local change: `../hm-release` = `origin/ruchir_kumar` @ `42fb8e6` + an
-**uncommitted** diff (sparse checkout, the three `temp_*.txt` files are not on disk). Argo CD tracks `master`;
-nothing in this diff is in Git, so **no GKE service is deployed**. `.gitignore` ignores `docs/*.md`: add this
-file with `git add -f`.
+`hospital-system`. **Snapshot of 2026-11-15.** The release changes described here were merged to `master` in
+PR #18 (`ff5cdc9`). At the time of this snapshot no Argo CD Application was registered, so **no GKE service was
+deployed**. Current steps: `docs/COMPLETION-GUIDE.md`.
 
 Labels: CLOUD-VERIFIED / LOCAL-VERIFIED / MOCK-TESTED / EMULATOR-TESTED / BLOCKED / DEFERRED / UNVERIFIED.
 

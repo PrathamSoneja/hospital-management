@@ -1,8 +1,10 @@
-# Handoff for Nisarg — requirement (b) "serverless function" (pending your review)
+# Handoff for Nisarg — requirement (b) "serverless function"
 
-**Status: PENDING.** Today's release keeps Notification unchanged. Nothing has been converted, applied or rerouted.
+**Status: option B implemented in PR #19 (merged to `master`), not applied yet.** Apply it with the two-step cut-over
+in `docs/COMPLETION-GUIDE.md` step B2, then run the verification below. The rest of this page is the original
+handoff.
 
-## What exists
+## What existed before PR #19
 
 - `services/notification` is a FastAPI app on **Cloud Run (service)**, `hospital-notification`, image
   `notification:initial`. It is triggered by **Eventarc** `hospital-notification-pubsub` from Pub/Sub topic

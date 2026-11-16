@@ -1,3 +1,5 @@
+> **SUPERSEDED — historical record only; do not follow these steps.** Written before the GCP deployment of 2026-11-15. Current instructions: [`docs/COMPLETION-GUIDE.md`](../docs/COMPLETION-GUIDE.md) (steps, owners, security cleanup) and the index [`docs/README.md`](../docs/README.md). Its test and load results predate the GCP release branch; current results are in the completion guide.
+
 # Pre-GCP Status: Allocation, Triage, Load, Observability (Pratham)
 
 Updated 2026-11-12. **Combined tree tested:** `2471995` (master `a53227a` merged; CI-mode run below). Load and suite rows marked `f4090d8`/`fc7a378` predate that merge. Local branch `integration/precloud-combined`, plus this

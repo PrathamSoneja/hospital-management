@@ -1,3 +1,5 @@
+> **SUPERSEDED — historical record only; do not follow these steps.** Written before the GCP deployment of 2026-11-15. Current instructions: [`docs/COMPLETION-GUIDE.md`](../docs/COMPLETION-GUIDE.md) (steps, owners, security cleanup) and the index [`docs/README.md`](../docs/README.md). Last updated 2026-11-06.
+
 # Project Handoff
 
 Updated: 2026-11-06

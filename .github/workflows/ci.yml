@@ -115,10 +115,13 @@ jobs:
         run: python -m tests.sandbox.cli infra-down
 
   publish-gke-images:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    # Master pushes only, and only once Workload Identity Federation is configured through the repository
+    # variables GCP_WIF_PROVIDER and GCP_WIF_SERVICE_ACCOUNT (docs/COMPLETION-GUIDE.md). Without them the job is
+    # skipped instead of failing. The provider trusts only this repository's refs/heads/master.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && vars.GCP_WIF_PROVIDER != '' && vars.GCP_WIF_SERVICE_ACCOUNT != ''
     needs: checks
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: write
       id-token: write
@@ -126,22 +129,21 @@ jobs:
       group: gke-image-promotion-master
       cancel-in-progress: false
     env:
-      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-      REGISTRY: asia-south1-docker.pkg.dev
-      AR_REPOSITORY: hospital-repo
+      REGISTRY_PATH: asia-south1-docker.pkg.dev/hospital-management-514618/hospital-repo
       IMAGE_TAG: ${{ github.sha }}
-      CLOUD_SQL_INSTANCE_CONNECTION_NAME: ${{ vars.CLOUD_SQL_INSTANCE_CONNECTION_NAME }}
-      PATIENT_DOCUMENTS_BUCKET: ${{ vars.PATIENT_DOCUMENTS_BUCKET }}
-      PATIENT_REGISTRY_GSA: ${{ vars.PATIENT_REGISTRY_GSA }}
-      PATIENT_REGISTRY_MIGRATION_GSA: ${{ vars.PATIENT_REGISTRY_MIGRATION_GSA }}
-      STAFF_SCHEDULER_GSA: ${{ vars.STAFF_SCHEDULER_GSA }}
-      LOCK_COORDINATOR_GSA: ${{ vars.LOCK_COORDINATOR_GSA }}
-      ZOOKEEPER_GSA: ${{ vars.ZOOKEEPER_GSA }}
     steps:
       - name: Check out the tested commit
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: ${{ env.KUBECTL_VERSION }}
 
       - name: Authenticate to Google Cloud with Workload Identity Federation
         id: gcp-auth
@@ -158,74 +160,35 @@ jobs:
           username: oauth2accesstoken
           password: ${{ steps.gcp-auth.outputs.access_token }}
 
-      - name: Set up Kustomize
-        uses: imranismail/setup-kustomize@v2
-
-      - name: Build and push Patient Registry
-        run: |
-          docker build \
-            --file services/patient_registry/Dockerfile \
-            --tag "$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/patient-registry:$IMAGE_TAG" .
-          docker push "$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/patient-registry:$IMAGE_TAG"
-
-      - name: Build and push Staff Scheduler
-        run: |
-          docker build \
-            --file services/staff_scheduler/Dockerfile \
-            --tag "$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/staff-scheduler:$IMAGE_TAG" .
-          docker push "$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/staff-scheduler:$IMAGE_TAG"
-
-      - name: Build and push Lock Coordinator
-        run: |
-          docker build \
-            --file services/lock_coordinator/Dockerfile \
-            --tag "$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/lock-coordinator:$IMAGE_TAG" .
-          docker push "$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/lock-coordinator:$IMAGE_TAG"
-
-      - name: Update GitOps image references and project configuration
+      - name: Build, push and digest-pin every GitOps image
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$PROJECT_ID"
-          test -n "$CLOUD_SQL_INSTANCE_CONNECTION_NAME"
-          test -n "$PATIENT_DOCUMENTS_BUCKET"
-          test -n "$PATIENT_REGISTRY_GSA"
-          test -n "$PATIENT_REGISTRY_MIGRATION_GSA"
-          test -n "$STAFF_SCHEDULER_GSA"
-          test -n "$LOCK_COORDINATOR_GSA"
-          test -n "$ZOOKEEPER_GSA"
+          python -m pip install --quiet pyyaml
+          # image | Dockerfile | kustomize directories whose `digest:` for that image is updated
+          while read -r name dockerfile dirs; do
+            ref="$REGISTRY_PATH/$name:$IMAGE_TAG"
+            docker build --file "$dockerfile" --tag "$ref" .
+            docker push "$ref"
+            pinned="$(docker inspect --format='{{range .RepoDigests}}{{println .}}{{end}}' "$ref" | grep "^$REGISTRY_PATH/$name@sha256:" | head -1)"
+            test -n "$pinned"
+            python scripts/pin_image_digest.py "$name" "${pinned#*@}" ${dirs//,/ }
+            echo "$name -> ${pinned#*@}"
+          done <<'IMAGES'
+          bed-allocation services/bed_allocation/Dockerfile k8s/overlays/staging,k8s/jobs/allocation-migrate
+          triage services/triage/Dockerfile k8s/overlays/staging
+          bed-registry services/bed_registry/Dockerfile k8s/bed-registry/overlays/gke
+          resource-analytics services/resource_analytics/Dockerfile k8s/resource-analytics/overlays/gke
+          patient-registry services/patient_registry/Dockerfile k8s/overlays/gke/patient-registry
+          staff-scheduler services/staff_scheduler/Dockerfile k8s/overlays/gke/staff-scheduler
+          lock-coordinator services/lock_coordinator/Dockerfile k8s/lock-coordinator/overlays/gke
+          demo-ui services/demo_ui/Dockerfile k8s/demo-ui
+          IMAGES
+          # Notification is a Cloud Run function: Terraform zips and builds it from source (no image here).
+          # Never commit a revision the release gate would reject.
+          python scripts/check_release_config.py
 
-          (cd k8s/overlays/gke && kustomize edit set image \
-            "patient-registry=$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/patient-registry:$IMAGE_TAG" \
-            "staff-scheduler=$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/staff-scheduler:$IMAGE_TAG")
-
-          (cd k8s/overlays/gke/patient-registry && kustomize edit set image \
-            "patient-registry=$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/patient-registry:$IMAGE_TAG")
-          (cd k8s/overlays/gke/staff-scheduler && kustomize edit set image \
-            "staff-scheduler=$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/staff-scheduler:$IMAGE_TAG")
-          (cd k8s/lock-coordinator/overlays/gke && kustomize edit set image \
-            "lock-coordinator=$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/lock-coordinator:$IMAGE_TAG")
-          sed -i \
-            "s|PLACEHOLDER_PROJECT_ID:asia-south1:PLACEHOLDER_SQL_INSTANCE|$CLOUD_SQL_INSTANCE_CONNECTION_NAME|g" \
-            k8s/overlays/gke/patient-registry/kustomization.yaml
-          find k8s/patient-registry k8s/staff-scheduler \
-            k8s/overlays/gke k8s/lock-coordinator/overlays/gke -type f \
-            \( -name '*.yaml' -o -name '*.yml' \) -print0 |
-            xargs -0 sed -i "s|PLACEHOLDER_PROJECT_ID|$PROJECT_ID|g"
-          sed -i "s|PLACEHOLDER_PATIENT_DOCUMENTS_BUCKET|$PATIENT_DOCUMENTS_BUCKET|g" \
-            k8s/overlays/gke/patient-registry/kustomization.yaml
-          sed -i "s|PLACEHOLDER_PATIENT_REGISTRY_GSA|$PATIENT_REGISTRY_GSA|g" \
-            k8s/patient-registry/base/patient-registry.yaml
-          sed -i "s|PLACEHOLDER_PATIENT_REGISTRY_MIGRATION_GSA|$PATIENT_REGISTRY_MIGRATION_GSA|g" \
-            k8s/patient-registry/base/migration-job.yaml
-          sed -i "s|PLACEHOLDER_STAFF_SCHEDULER_GSA|$STAFF_SCHEDULER_GSA|g" \
-            k8s/staff-scheduler/base/staff-scheduler.yaml
-          sed -i "s|PLACEHOLDER_LOCK_COORDINATOR_GSA|$LOCK_COORDINATOR_GSA|g" \
-            k8s/lock-coordinator/overlays/gke/kustomization.yaml
-          sed -i "s|PLACEHOLDER_ZOOKEEPER_GSA|$ZOOKEEPER_GSA|g" \
-            k8s/lock-coordinator/overlays/gke/zookeeper-service-account.yaml
-
-      - name: Commit image promotion for ArgoCD
+      - name: Commit image promotion for Argo CD
         shell: bash
         run: |
           set -euo pipefail
@@ -236,11 +199,13 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add k8s/patient-registry k8s/staff-scheduler \
-            k8s/overlays/gke k8s/lock-coordinator/overlays/gke
+          git add k8s/overlays/staging k8s/jobs/allocation-migrate k8s/bed-registry/overlays/gke \
+            k8s/resource-analytics/overlays/gke k8s/overlays/gke/patient-registry k8s/overlays/gke/staff-scheduler \
+            k8s/lock-coordinator/overlays/gke k8s/demo-ui
           if git diff --cached --quiet; then
             echo "GitOps image references are already current."
             exit 0
           fi
+          # Pushed with GITHUB_TOKEN, so this commit does not start another workflow run (no rebuild loop).
           git commit -m "chore(gitops): promote images ${IMAGE_TAG:0:12}"
           git push origin HEAD:master
