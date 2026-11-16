@@ -20,6 +20,7 @@ synthetic patient, admission and PDF through the public API. No credentials appe
 | `13-grafana-dashboard-load-test-2.png` | Grafana dashboard continued: outbox backlog, HPA current vs desired replicas, pod CPU and memory, Kubernetes available replicas and restarts | c, h |
 | `14-demo-01` … `14-demo-06-*.png` | Demo console on GKE, pool `DEMO-ICU-1700`, step by step: all services up; 2 beds + on-shift nurse; 3 admissions (urgency 3, 2, 1); **concurrent allocate → 2 ALLOCATED, 1 WAITLISTED**; **Repeat → idempotent replay, same allocation**; **release → waitlisted admission promoted onto the freed bed** | f, b, c |
 | `15-demo-console-request-log.json` | The console's request log and final state for that run | f |
+| `17-grafana-lock-coordinator-after-netpol-fix.png` | Grafana after PR #29 (NetworkPolicies admit `gmp-system`): "Lock Coordinator: Acquire Outcomes" now shows granted acquires, and the Lock Coordinator appears in RPS and latency | f, h |
 | `16-cloud-logging-all-services.txt` | Cloud Logging: entries from all eight services, the Cloud Run function and the Dataproc Flink job (JobManager/TaskManager, checkpoints) | h |
 
 Still to add here (screenshots): Flink job and `bed-stats` records (Jay); Nisarg's and Ruchir's screenshots (taken,
