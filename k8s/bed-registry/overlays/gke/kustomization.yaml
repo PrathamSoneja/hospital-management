@@ -17,7 +17,7 @@ configMapGenerator:
 images:
   - name: bed-registry
     newName: asia-south1-docker.pkg.dev/hospital-management-514618/hospital-repo/bed-registry
-    digest: sha256:bcf16408afa7e6f106f078f158d03b4afc373fd75ee3a9c8ef3144c92587770b
+    digest: sha256:c2588856a4e4222bd95b3d3a9ee3d11a5090e9316c94f1e9985843cf0f2ca348
 patches:
   - target: {kind: ServiceAccount, name: bed-registry-sa}
     patch: |-
