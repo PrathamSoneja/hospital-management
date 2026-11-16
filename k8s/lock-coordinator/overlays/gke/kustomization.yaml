@@ -7,7 +7,7 @@ resources:
 images:
   - name: lock-coordinator
     newName: asia-south1-docker.pkg.dev/hospital-management-514618/hospital-repo/lock-coordinator
-    digest: sha256:ae57bb84426a592ac5f5b23d2c5722f5d3b30aacfb3e41729f2302c2e83b2e71
+    digest: sha256:5ca7c2145b68c9124149b2d591e5655a2de9aee145558159d839088b1cfe86f9
 patches:
   - target:
       group: apps

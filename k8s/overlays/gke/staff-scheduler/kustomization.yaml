@@ -6,7 +6,7 @@ resources:
 images:
   - name: staff-scheduler
     newName: asia-south1-docker.pkg.dev/hospital-management-514618/hospital-repo/staff-scheduler
-    digest: sha256:80fbc3237674da5a46df313d8a3e2bdeb751c3ad57a2c80fcabe1b0c9c2567e0
+    digest: sha256:c1d34ff92c38523b016aaceac94c776f9938b7947299540d7a1be777eb665255
 patches:
   - target: {kind: ServiceAccount, name: staff-scheduler-sa}
     patch: |-
