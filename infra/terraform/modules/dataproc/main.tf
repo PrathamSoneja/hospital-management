@@ -8,11 +8,18 @@ resource "google_dataproc_cluster" "flink_cluster" {
     staging_bucket = var.staging_bucket
 
     gce_cluster_config {
-      subnetwork             = var.subnetwork
-      internal_ip_only       = true
-      service_account        = var.service_account
-      service_account_scopes = ["cloud-platform"]
-      tags                   = ["dataproc", "flink"]
+      subnetwork       = var.subnetwork
+      internal_ip_only = true
+      service_account  = var.service_account
+      # Dataproc always adds these three default scopes; listing them keeps the plan from replacing the cluster
+      # on every run (cloud-platform already covers them).
+      service_account_scopes = [
+        "https://www.googleapis.com/auth/cloud-platform",
+        "https://www.googleapis.com/auth/cloud.useraccounts.readonly",
+        "https://www.googleapis.com/auth/devstorage.read_write",
+        "https://www.googleapis.com/auth/logging.write",
+      ]
+      tags = ["dataproc", "flink"]
     }
 
     master_config {

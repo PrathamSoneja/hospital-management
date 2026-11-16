@@ -194,8 +194,8 @@ resource "google_pubsub_subscription" "eventarc" {
   }
 
   lifecycle {
-    # Eventarc configures the delivery endpoint on this generated subscription.
-    ignore_changes = [push_config]
+    # Eventarc configures the delivery endpoint and retry backoff (10s-600s) on this generated subscription.
+    ignore_changes = [push_config, retry_policy]
   }
 }
 
