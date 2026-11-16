@@ -15,6 +15,7 @@ synthetic patient, admission and PDF through the public API. No credentials appe
 | `08-notification-function.txt` | Cloud Run function `staff_notification` events; subscription DLQ and retry policy | b (serverless, Pub/Sub) |
 | `09-kafka-outbox.txt` | Allocation publishing to Pub/Sub and Kafka with an empty outbox backlog; Analytics subscribed to `bed-stats` | b (Kafka), e |
 | `10-firestore-indexes.txt` | Terraform-managed Firestore composite indexes READY | a, g |
+| `11-hpa-load-test.txt` | k6 load test: Bed Allocation 2→5 and Triage 2→4 replicas, 100 % checks, p95 4.9 s (above the 3 s threshold) | c |
 
-Still to add (screenshots): Flink job and `bed-stats` records (Jay), notification synthetic checks (Nisarg), HPA
-scale-out and Grafana dashboards (Pratham), `terraform state list` and the Argo CD UI (Ruchir).
+Still to add (screenshots): Flink job and `bed-stats` records (Jay), notification synthetic checks (Nisarg), Grafana
+dashboards (Pratham), `terraform state list` and the Argo CD UI (Ruchir).

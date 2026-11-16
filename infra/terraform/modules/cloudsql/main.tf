@@ -86,7 +86,7 @@ resource "google_sql_user" "allocation_migrator" {
 
 # Bed Registry: bed_registry_migrator owns the schema (migration Job); bed_registry is the runtime role and gets
 # DML only from the migration. Cloud SQL adds API-created users to cloudsqlsuperuser; the database owner removes
-# that from the runtime role once (docs/deployment-status-2026-11-15.md, "Bed Registry least privilege").
+# that from the runtime role once (REVOKE cloudsqlsuperuser; see docs/PROJECT.md §11).
 resource "google_sql_user" "bed_registry" {
   project             = var.project_id
   name                = "bed_registry"

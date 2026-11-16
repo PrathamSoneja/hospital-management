@@ -59,7 +59,7 @@ def upgrade():
     )
 
     # Existing rows keep a NULL stream_sequence: no order is guessed for them. Unfinished
-    # ones block their stream until an operator resolves them (docs/handoff.md procedure).
+    # ones block their stream until an operator resolves them.
     counts = bind.execute(sa.text(
         "SELECT destination, (pool_id IS NULL) AS no_pool, count(*) FROM outbox_events "
         "WHERE status <> 'DELIVERED' GROUP BY destination, (pool_id IS NULL) ORDER BY 1, 2"

@@ -1,0 +1,63 @@
+# HPA load test on GKE, 2026-11-16 16:15–16:29 UTC
+# k6 Job (k6/load-test-job.yaml) inside the cluster, started by syncing the Argo CD app hospital-load-test.
+# 2 pools (LOADTEST-A/B), 10 beds and 600 synthetic admissions each; ramp to 40 VUs over 2 min, hold 10 min.
+# HPAs: bed-allocation-hpa 2-10, triage-hpa 2-6, target 60% CPU. Cluster: 2 x e2-standard-4 (no node added).
+
+## HPA samples (kubectl, every ~36 s)
+time | bed-allocation hpa (cpu, current/desired) | triage hpa | pending pods | nodes
+16:16:14 | 7%, 2/2 | 2%, 2/2 | 0 | 2
+16:16:50 | 7%, 2/2 | 2%, 2/2 | 0 | 2
+16:17:27 | 78%, 3/3 | 58%, 2/2 | 0 | 2
+16:18:03 | 77%, 4/4 | 58%, 2/2 | 1 | 2
+16:18:39 | 63%, 4/4 | 44%, 2/2 | 1 | 2
+16:19:15 | 63%, 4/4 | 44%, 2/2 | 0 | 2
+16:19:51 | 67%, 5/5 | 63%, 2/2 | 0 | 2
+16:20:27 | 67%, 5/5 | 63%, 2/2 | 0 | 2
+16:21:04 | 55%, 5/5 | 60%, 2/2 | 0 | 2
+16:21:40 | 55%, 5/5 | 67%, 3/3 | 0 | 2
+16:22:16 | 55%, 5/5 | 67%, 3/3 | 0 | 2
+16:22:52 | 55%, 5/5 | 41%, 3/3 | 0 | 2
+16:23:29 | 55%, 5/5 | 41%, 3/3 | 0 | 2
+16:24:05 | 39%, 5/5 | 73%, 4/4 | 0 | 2
+16:24:41 | 28%, 5/5 | 73%, 4/4 | 0 | 2
+16:25:18 | 28%, 5/5 | 54%, 4/4 | 0 | 2
+16:25:55 | 26%, 5/5 | 54%, 4/4 | 0 | 2
+16:26:32 | 26%, 5/5 | 54%, 4/4 | 0 | 2
+16:27:08 | 26%, 5/5 | 54%, 4/4 | 0 | 2
+16:27:44 | 25%, 5/5 | 54%, 4/4 | 0 | 2
+16:28:20 | 25%, 5/5 | 56%, 4/4 | 0 | 2
+16:28:57 | 26%, 5/4 | 56%, 4/4 | 0 | 2
+16:29:34 | 9%, 4/4 | 7%, 4/4 | 0 | 2
+job finished (1)
+
+## k6 summary
+     ✓ triage PUT ok
+     ✓ allocation accepted
+     ✓ waitlist read ok
+     ✓ allocation list ok
+     ✓ release accepted or already released
+     checks.........................: 100.00% 25914 out of 25914
+     ✓ { kind:read }................: 100.00% 22966 out of 22966
+     ✓ { kind:write }...............: 100.00% 2948 out of 2948
+     data_received..................: 130 MB  163 kB/s
+     data_sent......................: 6.7 MB  8.3 kB/s
+     http_req_blocked...............: avg=54.69µs  min=3.78µs   med=9.73µs   max=7.23ms p(90)=17.49µs  p(95)=234.83µs
+     http_req_connecting............: avg=31.92µs  min=0s       med=0s       max=5.96ms p(90)=0s       p(95)=0s      
+   ✗ http_req_duration..............: avg=492.43ms min=10.02ms  med=23.81ms  max=7.32s  p(90)=1.44s    p(95)=4.9s    
+       { expected_response:true }...: avg=459.11ms min=10.02ms  med=23.66ms  max=7.32s  p(90)=391.28ms p(95)=4.78s   
+     http_req_failed................: 0.73%   213 out of 29151
+     http_req_receiving.............: avg=261.3µs  min=34.47µs  med=156.14µs max=6.03ms p(90)=549.56µs p(95)=775.99µs
+     http_req_sending...............: avg=57.06µs  min=11.56µs  med=38.48µs  max=4.62ms p(90)=80.59µs  p(95)=123.81µs
+     http_req_tls_handshaking.......: avg=0s       min=0s       med=0s       max=0s     p(90)=0s       p(95)=0s      
+     http_req_waiting...............: avg=492.11ms min=9.85ms   med=23.53ms  max=7.32s  p(90)=1.44s    p(95)=4.9s    
+     http_reqs......................: 29151   36.371092/s
+     iteration_duration.............: avg=2.35s    min=765.97ms med=1.24s    max=35.47s p(90)=2.09s    p(95)=10.69s  
+     iterations.....................: 11483   14.327099/s
+     vus............................: 2       min=0              max=40
+     vus_max........................: 40      min=40             max=40
+time="2026-11-16T16:29:04Z" level=error msg="thresholds on metrics 'http_req_duration' have been crossed"
+
+## Reading
+- Scale-out: Bed Allocation 2 -> 3 -> 4 -> 5 replicas within ~4 min of load; Triage 2 -> 3 -> 4. One pod was briefly Pending at 16:18; no node was added. Both scaled back down after the run (5 -> 4 at 16:29, then towards the minimum).
+- Correctness: 100% of 25,914 checks passed (allocation accepted, waitlist read, release accepted, triage PUT).
+- Latency: median 24 ms, p90 1.44 s, p95 4.9 s. The p95 threshold (3 s) was crossed, so k6 exited non-zero and the Job is Failed. Writes for one pool are serialised by the pool lock by design; 40 VUs on only 2 pools queue on those two locks.

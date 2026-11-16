@@ -77,9 +77,8 @@ pgdata/
 zookeeper_data/
 kafka_data/
 
-# Local-only stubs, seeds, emulator helpers, and overrides (README remains tracked)
+# Local-only stubs, seeds, emulator helpers, and overrides
 dev-local/*
-!dev-local/README.md
 docs/audit.md
 docs/next-steps.md
 
@@ -87,10 +86,6 @@ docs/next-steps.md
 tfplan.bin
 tfplan.txt
 /evidence/
-!docs/gcp-integration-runbook.md
-!docs/member_d_demo_runbook.md
-!docs/member_d_viva_qa.md
-!docs/precloud-status.md
 
 # Local sandbox runtime state, logs, and load evidence (tests/sandbox)
 /.sandbox/
