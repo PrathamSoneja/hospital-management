@@ -103,3 +103,7 @@ desktop.ini
 *.pem
 *-key.json
 *credentials*.json
+
+
+# Notification function source zip, built by Terraform's archive_file
+infra/terraform/modules/notifications/.build/

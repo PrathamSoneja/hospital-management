@@ -182,13 +182,6 @@ jobs:
             --tag "$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/lock-coordinator:$IMAGE_TAG" .
           docker push "$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/lock-coordinator:$IMAGE_TAG"
 
-      - name: Build and push Notification
-        run: |
-          docker build \
-            --file services/notification/Dockerfile \
-            --tag "$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/notification:$IMAGE_TAG" .
-          docker push "$REGISTRY/$PROJECT_ID/$AR_REPOSITORY/notification:$IMAGE_TAG"
-
       - name: Update GitOps image references and project configuration
         shell: bash
         run: |

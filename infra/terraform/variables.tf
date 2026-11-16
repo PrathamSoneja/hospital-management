@@ -289,11 +289,6 @@ variable "allocation_migrator_db_password_version" {
   default     = 1
 }
 
-variable "notification_image" {
-  description = "Artifact Registry image for the Member C Notification Cloud Run service. Supply after that service image is built."
-  type        = string
-}
-
 variable "deletion_protection" {
   description = "Enable deletion protection on stateful data resources and GKE."
   type        = bool
