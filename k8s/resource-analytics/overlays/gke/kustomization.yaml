@@ -22,7 +22,7 @@ patches:
         value: {name: ANALYTICS_STORAGE_BACKEND, value: firestore}
       - op: add
         path: /spec/template/spec/containers/0/env/-
-        value: {name: KAFKA_BOOTSTRAP_SERVERS, value: PLACEHOLDER_KAFKA_BOOTSTRAP}
+        value: {name: KAFKA_BOOTSTRAP_SERVERS, value: pkc-41p56.asia-south1.gcp.confluent.cloud:9092}
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value: {name: KAFKA_SASL_USERNAME_FILE, value: /var/run/secrets/app/kafka-sasl-username}
