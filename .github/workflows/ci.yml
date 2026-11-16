@@ -78,7 +78,12 @@ jobs:
           docker run --rm --entrypoint promtool -v "$PWD/monitoring/rules:/r:ro" "$PROMETHEUS_IMAGE" test rules /r/alerts.test.yml
 
       - name: Start sandbox infrastructure
-        run: python -m tests.sandbox.cli infra-up
+        run: |
+          # The sandbox binds fixed ports 42181-49092 (tests/sandbox/cli.py, compose.yaml), inside Linux's
+          # ephemeral range. Reserve them so no outbound connection or free_port() test server can hold one
+          # (a run failed with "Address already in use" on 47080).
+          sudo sysctl -w net.ipv4.ip_local_reserved_ports=42000-49999
+          python -m tests.sandbox.cli infra-up
 
       - name: Full test suite (integration required; any skip fails)
         run: python -m tests.sandbox.cli verify
