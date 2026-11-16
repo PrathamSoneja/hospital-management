@@ -6,7 +6,7 @@ TEAM TASK DIVISION AND COMPONENT OWNERSHIP
 
 TEAM ROSTER & BITS STUDENT IDs:
 --------------------------------------------------------------------------------
-Member A: Ruchi Kumar   | ID: 2026H1030083P
+Member A: Ruchir Kumar   | ID: 2026H1030083P
 Member B: Pratham Soneja | ID: 2026H1030055P
 Member C: Nisarg Vagh    | ID: 2026H1030066P
 Member D: Jay Patel      | ID: 2026H1030072P
@@ -15,7 +15,7 @@ Member D: Jay Patel      | ID: 2026H1030072P
 DETAILED WORKLOAD AND TASK ALLOCATION:
 ================================================================================
 
-MEMBER A: Ruchi Kumar (2026H1030083P)
+MEMBER A: Ruchir Kumar (2026H1030083P)
 Assigned Rubric Tasks:
 - Task (a): Patient Registry Service (FastAPI REST service, Cloud SQL PostgreSQL,
             GCS bucket integration for patient documents, medical record metadata)

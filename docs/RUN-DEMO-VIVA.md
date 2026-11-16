@@ -338,3 +338,7 @@ fresh pool ID per run, e.g. `DEMO-ICU-<time>`. Each presenter shows their two re
 9. **App OutOfSync after a merge:** CI promoted new images; sync it. An old generated ConfigMap stays OutOfSync until
    a sync with prune.
 10. **400 `Idempotency-Key: Field required`:** every POST needs the header.
+11. **Allocation migrations app OutOfSync after a merge:** the migration Job is an Argo CD Sync hook
+    (`BeforeHookCreation`), so syncing `hospital-allocation-migrations-staging` deletes the old Job and runs a fresh
+    one; at the current schema `alembic upgrade head` does nothing. (Before this, a promoted image digest could not
+    be patched into the completed Job, because a Job's pod template is immutable.)

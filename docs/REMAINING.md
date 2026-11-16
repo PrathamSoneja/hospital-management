@@ -17,7 +17,7 @@ Last updated: 2026-11-16.
 | 5 | Platform evidence | Ruchir | TAKEN — add the screenshots to `docs/evidence/2026-11-16-gke/` | `terraform state list`, Argo CD UI (all Synced/Healthy), Staff Scheduler data in Firestore, Cloud SQL rows. Guide §B.1 |
 | 6 | Export diagrams | Anyone | TODO | Paste the Mermaid blocks of `docs/PROJECT.md` §4 into mermaid.live, export PNG |
 | 7 | Update the design document | Nisarg (author) | TODO | Add the diagrams and `docs/PROJECT.md` §13 "Differences from the design document" to `cloud_proj_plan.docx` |
-| 8 | Confirm `task_divison.txt` | Everyone | TODO | Names and IDs; member A is written as "Ruchi Kumar" — correct it if the name is Ruchir |
+| 8 | Confirm `task_divison.txt` | Everyone | DONE | Member A corrected to "Ruchir Kumar" (roster and detail section); IDs unchanged |
 | 9 | Viva preparation | Everyone | TODO | Each member: their two requirements and two services, `docs/RUN-DEMO-VIVA.md` Part C |
 | 10 | Rehearse the demo once end to end | Everyone | TODO | `docs/RUN-DEMO-VIVA.md` Part B, about 20 minutes |
 | 11 | Submit on Nalanda | Pratham | TODO | One submission per group: GitHub link, design document, `task_divison.txt` |
