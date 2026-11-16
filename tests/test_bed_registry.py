@@ -417,3 +417,15 @@ def test_migration_rejects_unsafe_role_names():
     from services.bed_registry.migrate import migrate
     with pytest.raises(ValueError):
         migrate("bed_registry; DROP TABLE beds")
+
+
+def test_public_availability_returns_counts_only_for_demo_pools(monkeypatch):
+    from fastapi.testclient import TestClient
+    from services.bed_registry.main import build_app
+    app = build_app(start_grpc=False, db_url="sqlite:///:memory:", auto_seed=False)
+    client = TestClient(app)
+    for bed_id, pool, status in (("d1", "DEMO-ICU", "AVAILABLE"), ("d2", "DEMO-ICU", "OCCUPIED"), ("x1", "REAL-ICU", "AVAILABLE")):
+        assert client.post("/api/v1/beds", json={"bed_id": bed_id, "pool_id": pool, "ward": "W", "status": status}).status_code == 201
+    body = client.get("/api/v1/public/availability").json()
+    assert body["pools"] == [{"pool_id": "DEMO-ICU", "available": 1, "occupied": 1, "other": 0, "total": 2}]
+    assert "d1" not in str(body) and "REAL-ICU" not in str(body)

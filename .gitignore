@@ -82,7 +82,6 @@ dev-local/*
 !dev-local/README.md
 docs/audit.md
 docs/next-steps.md
-docs/*.md
 
 # Saved Terraform plans and post-deploy evidence (may include project details and logs)
 tfplan.bin

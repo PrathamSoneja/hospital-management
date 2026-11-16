@@ -1,3 +1,5 @@
+> **SUPERSEDED — historical record only; do not follow these steps.** Written before the GCP deployment of 2026-11-15. Current instructions: [`docs/COMPLETION-GUIDE.md`](../docs/COMPLETION-GUIDE.md) (steps, owners, security cleanup) and the index [`docs/README.md`](../docs/README.md). It refers to `k8s/argocd/` (removed) and to placeholder values that are now resolved in Git.
+
 # GCP Integration Runbook (Bed Allocation, Triage, HPA, Observability)
 
 Status: **UNEXECUTED.** Nothing in this runbook has been run against GCP. Every command that touches

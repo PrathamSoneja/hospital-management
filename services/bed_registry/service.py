@@ -45,6 +45,21 @@ class BedRegistryDomainService:
                 for b in beds
             ]
 
+    def availability_summary(self, pool_prefix: str = "") -> List[dict]:
+        """Aggregate counts per pool and status only: no bed, allocation, patient or staff identifiers."""
+        from sqlalchemy import func
+        with self.session_factory() as session:
+            stmt = select(BedModel.pool_id, BedModel.status, func.count()).group_by(BedModel.pool_id, BedModel.status)
+            if pool_prefix:
+                stmt = stmt.where(BedModel.pool_id.startswith(pool_prefix))
+            pools: dict = {}
+            for pool_id, status, count in session.execute(stmt).all():
+                entry = pools.setdefault(pool_id, {"pool_id": pool_id, "available": 0, "occupied": 0, "other": 0, "total": 0})
+                key = {"AVAILABLE": "available", "OCCUPIED": "occupied"}.get(status, "other")
+                entry[key] += count
+                entry["total"] += count
+            return [pools[k] for k in sorted(pools)]
+
     def get_bed(self, bed_id: str, request_id: str = "") -> Optional[BedDto]:
         """Fetches bed details by ID."""
         with self.session_factory() as session:

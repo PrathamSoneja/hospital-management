@@ -53,6 +53,18 @@ def create_or_update_bed(
     )
     return bed
 
+@router.get("/public/availability")
+def public_availability(service: BedRegistryDomainService = Depends(get_service)):
+    """Read-only aggregate bed availability per pool (public demo endpoint; counts only).
+
+    PUBLIC_AVAILABILITY_POOL_PREFIX limits it to the synthetic demo pools (default DEMO-).
+    """
+    import os
+    prefix = os.environ.get("PUBLIC_AVAILABILITY_POOL_PREFIX", "DEMO-")
+    pools = service.availability_summary(prefix)
+    return {"pools": pools, "pool_prefix": prefix}
+
+
 @router.get("/beds/{bed_id}", response_model=BedDto)
 def get_bed(
     bed_id: str = Path(..., description="Bed identifier"),

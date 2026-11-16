@@ -67,11 +67,9 @@ manifests and overlays are under `k8s/`.
 
 ## Verification status
 
-The latest recorded local CI-mode evidence in [`docs/precloud-status.md`](docs/precloud-status.md)
-reports 245 passing tests and 2 expected failures, with the local load procedure passing. That
-evidence predates the November 13 pull and is not a verification result for the current HEAD.
-Nothing in this repository has been deployed to GCP according to
-[`docs/gcp-integration-runbook.md`](docs/gcp-integration-runbook.md).
+Current status, remaining steps and owners: [`docs/COMPLETION-GUIDE.md`](docs/COMPLETION-GUIDE.md).
+Live GCP inventory: [`docs/deployment-status-2026-11-15.md`](docs/deployment-status-2026-11-15.md).
+All documents, current and historical: [`docs/README.md`](docs/README.md).
 
 ## Subsequent integration updates
 
@@ -103,5 +101,4 @@ Nothing in this repository has been deployed to GCP according to
    relying on pre-pull strict-xfail evidence.
 
 See [`gitops/README.md`](gitops/README.md), [`infra/terraform/README.md`](infra/terraform/README.md),
-and [`docs/gcp-integration-runbook.md`](docs/gcp-integration-runbook.md) for setup and operational
-details.
+and [`docs/COMPLETION-GUIDE.md`](docs/COMPLETION-GUIDE.md) for setup and operational details.
