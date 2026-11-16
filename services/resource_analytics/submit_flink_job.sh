@@ -67,8 +67,33 @@ trap "shred -u \"$SQL\" 2>/dev/null || rm -f \"$SQL\"" EXIT
 cat > "$SQL"
 if ! yarn application -list -appStates RUNNING 2>/dev/null | grep -q "hospital-flink-session"; then
   /usr/lib/flink/bin/yarn-session.sh -d -nm hospital-flink-session >/tmp/yarn-session.log 2>&1
+  sleep 15
 fi
-/usr/lib/flink/bin/sql-client.sh -j "$JAR" -f "$SQL"'
+# ---------------------------------------------------------------------------
+# Flink 1.15 sql-client cancels submitted jobs during its shutdown
+# (LocalExecutor.closeSession -> cancelOperation for every running job).
+# Workaround: run it in the background, poll until the streaming job
+# appears on the session cluster, then SIGKILL the client before its
+# teardown can issue the cancel REST call.
+# ---------------------------------------------------------------------------
+/usr/lib/flink/bin/sql-client.sh -j "$JAR" -f "$SQL" >/tmp/sql-client.log 2>&1 &
+CLIENT_PID=$!
+echo "Waiting for job hospital-bed-stats-1m to reach RUNNING on the session cluster..."
+for i in $(seq 1 90); do
+  sleep 2
+  if /usr/lib/flink/bin/flink list -r 2>/dev/null | grep -q "hospital-bed-stats-1m"; then
+    echo "Job is RUNNING. Force-killing SQL client to prevent teardown cancel..."
+    kill -9 $CLIENT_PID 2>/dev/null || true
+    wait $CLIENT_PID 2>/dev/null || true
+    echo "Done. The streaming job will continue on the YARN session cluster."
+    /usr/lib/flink/bin/flink list -r
+    exit 0
+  fi
+done
+echo "ERROR: job did not appear within 3 minutes; check /tmp/sql-client.log and YARN logs."
+cat /tmp/sql-client.log 2>/dev/null || true
+kill $CLIENT_PID 2>/dev/null || true
+exit 1'
 
 echo "Submitting hospital-bed-stats-1m to ${CLUSTER_NAME} (${ZONE}) through IAP..."
 render | gcloud compute ssh "$MASTER" --zone="$ZONE" --project="$PROJECT_ID" --tunnel-through-iap --command="$REMOTE"
