@@ -4,6 +4,8 @@ apiVersion: secrets-store.csi.x-k8s.io/v1
 kind: SecretProviderClass
 metadata:
   name: allocation-migration-secrets
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"   # exists before the migration hook runs
 spec:
   provider: gke
   parameters:
@@ -16,6 +18,12 @@ kind: Job
 metadata:
   # Rename per approved revision (e.g. allocation-migrate-20261031-03) so a Job is never reused.
   name: allocation-migrate-20261031-04
+  # Argo CD Sync hook: each sync deletes the previous Job and runs a fresh one (`alembic upgrade head` is a no-op
+  # at head). A plain Job cannot be patched when CI promotes a new image digest (the pod template is immutable),
+  # and it would show Missing once ttlSecondsAfterFinished removes it. The finished Job stays until the next sync.
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
   labels:
     app.kubernetes.io/part-of: hospital-bed-management
 spec:

@@ -11,5 +11,8 @@ images:
     digest: sha256:97ecb6f00abc987eab5282b3cfb95b01b58b20bc7ed8c0297537dedbe4b3b8d8
 configMapGenerator:
   - name: allocation-migration-config
+    options:
+      annotations:
+        argocd.argoproj.io/sync-wave: "-1"   # exists before the migration hook runs
     literals:
       - CLOUD_SQL_INSTANCE_CONNECTION_NAME=hospital-management-514618:asia-south1:hospital-postgres
