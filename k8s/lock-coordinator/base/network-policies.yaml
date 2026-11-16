@@ -17,6 +17,9 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: monitoring
+        - namespaceSelector:  # GKE Managed Prometheus collectors (PodMonitoring)
+            matchLabels:
+              kubernetes.io/metadata.name: gmp-system
       ports:
         - port: 8000
           protocol: TCP
@@ -66,6 +69,9 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: monitoring
+        - namespaceSelector:  # GKE Managed Prometheus collectors (PodMonitoring)
+            matchLabels:
+              kubernetes.io/metadata.name: gmp-system
       ports:
         - port: 7000
           protocol: TCP
