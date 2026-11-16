@@ -76,7 +76,7 @@
   <section>
     <h2>Resource analytics</h2>
     <pre id="analytics" class="muted">—</pre>
-    <p class="muted">Kafka → Flink aggregation is deferred until Confluent is enabled; values may be empty.</p>
+    <p class="muted">Allocation events → Kafka <code>bed-events</code> → Flink 1-minute windows on Dataproc → <code>bed-stats</code> → Firestore. A window appears about a minute after it closes, and only while the Flink job is running.</p>
   </section>
   <section class="wide">
     <h2>Request log</h2>
