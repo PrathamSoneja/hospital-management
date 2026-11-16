@@ -124,7 +124,7 @@ sequenceDiagram
   BA->>PR: REST GET admission (must be OPEN)
   BA->>TR: gRPC triage level, waitlist head (CHECK_PRIORITY)
   BA->>LC: gRPC Acquire(pool) → lease + fencing token
-  LC->>ZK: ephemeral sequential znode; lowest holds the lock
+  LC->>ZK: ephemeral sequential znode, lowest holds the lock
   BA->>BR: gRPC AllocateBed(MutationContext with token)
   BA->>SS: gRPC AssignStaff(MutationContext with token)
   alt no free bed or no on-shift nurse
