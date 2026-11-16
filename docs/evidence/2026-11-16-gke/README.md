@@ -18,6 +18,9 @@ synthetic patient, admission and PDF through the public API. No credentials appe
 | `11-hpa-load-test.txt` | k6 load test: Bed Allocation 2→5 and Triage 2→4 replicas, 100 % checks, p95 4.9 s (above the 3 s threshold) | c |
 | `12-grafana-dashboard-load-test-1.png` | Grafana dashboard (last 6 h, load test at about 21:45–22:00 IST): RPS, 5xx error rate, p50/p95 latency, allocation outcomes, lock wait duration | h, c |
 | `13-grafana-dashboard-load-test-2.png` | Grafana dashboard continued: outbox backlog, HPA current vs desired replicas, pod CPU and memory, Kubernetes available replicas and restarts | c, h |
+| `14-demo-01` … `14-demo-06-*.png` | Demo console on GKE, pool `DEMO-ICU-1700`, step by step: all services up; 2 beds + on-shift nurse; 3 admissions (urgency 3, 2, 1); **concurrent allocate → 2 ALLOCATED, 1 WAITLISTED**; **Repeat → idempotent replay, same allocation**; **release → waitlisted admission promoted onto the freed bed** | f, b, c |
+| `15-demo-console-request-log.json` | The console's request log and final state for that run | f |
+| `16-cloud-logging-all-services.txt` | Cloud Logging: entries from all eight services, the Cloud Run function and the Dataproc Flink job (JobManager/TaskManager, checkpoints) | h |
 
 Still to add here (screenshots): Flink job and `bed-stats` records (Jay); Nisarg's and Ruchir's screenshots (taken,
-not yet committed); the demo console flow and a Cloud Logging query (Pratham).
+not yet committed).

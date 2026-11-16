@@ -10,10 +10,10 @@ Last updated: 2026-11-16.
 | # | Item | Owner | Status | How / notes |
 |---|---|---|---|---|
 | 1 | HPA load test evidence | Pratham | DONE | `docs/evidence/2026-11-16-gke/11-hpa-load-test.txt`: scale-out shown, all checks passed; the k6 p95 threshold (3 s) was missed (4.9 s), see §3 |
-| 2 | Flink job running and evidence | Jay | TODO (job running) | Screenshots: Flink UI job RUNNING with checkpoints, Confluent `bed-events` and `bed-stats` messages, Firestore `pool_stats`, Dataproc logs. Guide §B.5 |
+| 2 | Flink job running and evidence | Jay | TODO — **job not running**: the Flink YARN session was killed at 16:14:34 UTC (exit 143) after ~5 min; resubmit, keep it running, then capture | Screenshots: Flink UI job RUNNING with checkpoints, Confluent `bed-events` and `bed-stats` messages, Firestore `pool_stats`, Dataproc logs. Guide §B.5 |
 | 3 | Notification function checks | Nisarg | TAKEN — add the screenshots to `docs/evidence/2026-11-16-gke/` | Synthetic handled / duplicate / malformed events on pool `NISARG-TEST`; DLQ configuration. Guide §B.4 |
 | 4 | Grafana dashboard screenshots | Pratham | DONE | `12-` and `13-grafana-dashboard-load-test-*.png`. The panel "Lock Coordinator: Acquire Outcomes and Lease Expiry" shows **No data** — check the Lock Coordinator PodMonitoring before Nisarg's demo |
-| 4b | Demo console flow and a Cloud Logging query (all services + the Dataproc job) | Pratham | TODO | Guide §B.2 steps 1–3 and 6; the brief asks for logs "including the analytics job" |
+| 4b | Demo console flow and a Cloud Logging query (all services + the Dataproc job) | Pratham | DONE | `14-demo-0*.png`, `15-demo-console-request-log.json`, `16-cloud-logging-all-services.txt` |
 | 5 | Platform evidence | Ruchir | TAKEN — add the screenshots to `docs/evidence/2026-11-16-gke/` | `terraform state list`, Argo CD UI (all Synced/Healthy), Staff Scheduler data in Firestore, Cloud SQL rows. Guide §B.1 |
 | 6 | Export diagrams | Anyone | TODO | Paste the Mermaid blocks of `docs/PROJECT.md` §4 into mermaid.live, export PNG |
 | 7 | Update the design document | Nisarg (author) | TODO | Add the diagrams and `docs/PROJECT.md` §13 "Differences from the design document" to `cloud_proj_plan.docx` |
