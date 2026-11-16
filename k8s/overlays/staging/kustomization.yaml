@@ -22,20 +22,6 @@ configMapGenerator:
   - name: triage-config
     envs: [triage.properties]
 patches:
-  # GCP-only phase (OUTBOX_DESTINATIONS=pubsub): the Kafka secret files are not mounted, so drop their
-  # *_FILE references (indices 5 then 4 of the base env list). Remove this patch when Kafka is enabled.
-  - target: {kind: Deployment, name: bed-allocation-service}
-    patch: |-
-      - op: test
-        path: /spec/template/spec/containers/0/env/5/name
-        value: KAFKA_SASL_PASSWORD_FILE
-      - op: remove
-        path: /spec/template/spec/containers/0/env/5
-      - op: test
-        path: /spec/template/spec/containers/0/env/4/name
-        value: KAFKA_SASL_USERNAME_FILE
-      - op: remove
-        path: /spec/template/spec/containers/0/env/4
   - target: {kind: ServiceAccount, name: bed-allocation-sa}
     patch: |-
       - op: replace

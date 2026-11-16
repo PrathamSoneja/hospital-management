@@ -190,16 +190,16 @@ module "dataproc" {
   ]
 }
 
-# TEMPORARY: Confluent excluded from initial GCP-only deployment.
-# module "confluent" {
-#   source = "./modules/confluent"
-#
-#   name_prefix         = var.name_prefix
-#   environment_name    = var.confluent_environment_name
-#   kafka_cluster_name  = var.confluent_cluster_name
-#   region              = var.confluent_region
-#   deletion_protection = var.deletion_protection
-# }
+# Confluent Cloud Kafka (requirement e): topics bed-events / bed-stats and least-privilege API keys.
+module "confluent" {
+  source = "./modules/confluent"
+
+  name_prefix         = var.name_prefix
+  environment_name    = var.confluent_environment_name
+  kafka_cluster_name  = var.confluent_cluster_name
+  region              = var.confluent_region
+  deletion_protection = var.deletion_protection
+}
 
 # Bed Registry database URLs (Cloud SQL Auth Proxy sidecar on 127.0.0.1:5432, private IP). Write-only secret
 # data built from ephemeral variables: not stored in plan files or state; a new version is written only when
@@ -218,4 +218,71 @@ resource "google_secret_manager_secret_version" "bed_registry_migration_database
   secret_data_wo_version = var.bed_registry_migrator_db_password_version
 
   depends_on = [module.cloudsql]
+}
+
+# ---------- Kafka runtime credentials in Secret Manager (values come from the Confluent API keys) ----------
+locals {
+  kafka_credentials = {
+    allocation = { username = module.notifications.kafka_username_secret_id, password = module.notifications.kafka_password_secret_id, key = "bed_allocation" }
+    analytics  = { username = google_secret_manager_secret.kafka_sasl["analytics-username"].secret_id, password = google_secret_manager_secret.kafka_sasl["analytics-password"].secret_id, key = "resource_analytics" }
+    flink      = { username = google_secret_manager_secret.kafka_sasl["flink-username"].secret_id, password = google_secret_manager_secret.kafka_sasl["flink-password"].secret_id, key = "flink" }
+  }
+}
+
+resource "google_secret_manager_secret" "kafka_sasl" {
+  for_each  = toset(["analytics-username", "analytics-password", "flink-username", "flink-password"])
+  project   = var.project_id
+  secret_id = "kafka-${replace(each.key, "-", "-sasl-")}"
+
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "kafka_username" {
+  for_each    = local.kafka_credentials
+  secret      = "projects/${var.project_id}/secrets/${each.value.username}"
+  secret_data = module.confluent.runtime_credentials[each.value.key].username
+}
+
+resource "google_secret_manager_secret_version" "kafka_password" {
+  for_each    = local.kafka_credentials
+  secret      = "projects/${var.project_id}/secrets/${each.value.password}"
+  secret_data = module.confluent.runtime_credentials[each.value.key].password
+}
+
+# Resource Analytics reads only its own Kafka credentials.
+resource "google_secret_manager_secret_iam_member" "analytics_kafka_accessor" {
+  for_each  = toset(["analytics-username", "analytics-password"])
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.kafka_sasl[each.key].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${var.name_prefix}-resource-analytics@${var.project_id}.iam.gserviceaccount.com"
+
+  depends_on = [module.iam]
+}
+
+# Operators who submit the Flink job (submit_flink_job.sh) read the Flink credentials.
+resource "google_secret_manager_secret_iam_member" "flink_kafka_operator" {
+  for_each = { for pair in setproduct(var.flink_operator_members, ["flink-username", "flink-password"]) : "${pair[0]}|${pair[1]}" => pair }
+
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.kafka_sasl[each.value[1]].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = each.value[0]
+}
+
+# IAP TCP forwarding to the Dataproc master (internal IP only) for the Flink job submission.
+resource "google_compute_firewall" "dataproc_iap_ssh" {
+  project       = var.project_id
+  name          = "${var.name_prefix}-vpc-allow-iap-ssh-dataproc"
+  network       = module.network.network_name
+  direction     = "INGRESS"
+  source_ranges = ["35.235.240.0/20"]
+  target_tags   = ["dataproc"]
+
+  allow {
+    protocol = "tcp"
+    ports    = ["22"]
+  }
 }
