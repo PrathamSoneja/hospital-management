@@ -12,10 +12,10 @@ components:
 images:
   - name: bed-allocation
     newName: asia-south1-docker.pkg.dev/hospital-management-514618/hospital-repo/bed-allocation
-    digest: sha256:9d0bcb6563d5a04c20ee280b0b3570f93ea357cd476e399c52bad5f59314733e
+    digest: sha256:59a4822308136258d48a13d28f19fbbc9cbc17a006c8a590b2473b82a4d7876c
   - name: triage
     newName: asia-south1-docker.pkg.dev/hospital-management-514618/hospital-repo/triage
-    digest: sha256:cace6664781aaa6e1b8ee162d718b7ce7dff8e7d399d5838110b5d24ddc2abda
+    digest: sha256:3b9d8c1e9ece2ae4bfd0f04e1c82d7785bf3d89068035c0d972ab53d005dfdc2
 configMapGenerator:
   - name: allocation-config
     envs: [allocation.properties]

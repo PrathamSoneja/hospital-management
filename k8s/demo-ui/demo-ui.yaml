@@ -24,6 +24,9 @@ spec:
         app.kubernetes.io/part-of: hospital-bed-management
     spec:
       serviceAccountName: demo-ui-sa
+      # The Service is named demo-ui, so Kubernetes would inject DEMO_UI_PORT=tcp://<ip>:80 and override the
+      # app's DEMO_UI_PORT setting (the pod crash-looped on int("tcp://...")). The UI calls services by DNS.
+      enableServiceLinks: false
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
