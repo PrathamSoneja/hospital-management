@@ -45,11 +45,11 @@ MEMBER C: Nisarg Vagh (2026H1030066P)
 Assigned Rubric Tasks:
 - Task (f): Distributed Locking (ZooKeeper 3-node ensemble, Lock Coordinator gRPC service,
             distributed lock leases with monotonic fencing tokens)
-- Task (b): Notification Service (Serverless Google Cloud Run service, Eventarc,
-            Pub/Sub push subscription handler for discharge and allocation notices)
+- Task (b): Notification Service (Serverless Google Cloud Run function, 2nd gen; Eventarc
+            Pub/Sub trigger; event_id deduplication in Firestore; dead-letter topic)
 Platform & DevOps Responsibilities:
 - ZooKeeper StatefulSet deployment on Kubernetes with persistent volumes and quorum probes
-- Pub/Sub topics, Eventarc triggers, and Cloud Run IAM authorization policies
+- Pub/Sub topics, Eventarc triggers, Cloud Run function build/IAM, and dead-letter policy
 - Split-brain mitigation, leader election resilience, and network partition recovery tests
 
 --------------------------------------------------------------------------------
