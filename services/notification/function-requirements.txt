@@ -1,0 +1,5 @@
+# Packages for the Notification Cloud Run function. Terraform ships this as the function's requirements.txt.
+# Only what function.py, handler.py, store.py and shared/observability/logging.py import.
+functions-framework==3.8.2
+google-cloud-firestore>=2.15.0
+jsonschema>=4.21.0

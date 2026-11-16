@@ -184,9 +184,7 @@ jobs:
           lock-coordinator services/lock_coordinator/Dockerfile k8s/lock-coordinator/overlays/gke
           demo-ui services/demo_ui/Dockerfile k8s/demo-ui
           IMAGES
-          # Notification runs on Cloud Run; Terraform (notification_image) decides which tag it uses.
-          docker build --file services/notification/Dockerfile --tag "$REGISTRY_PATH/notification:$IMAGE_TAG" .
-          docker push "$REGISTRY_PATH/notification:$IMAGE_TAG"
+          # Notification is a Cloud Run function: Terraform zips and builds it from source (no image here).
           # Never commit a revision the release gate would reject.
           python scripts/check_release_config.py
 

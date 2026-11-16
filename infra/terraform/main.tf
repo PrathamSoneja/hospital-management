@@ -1,6 +1,8 @@
 locals {
   required_apis = toset([
     "artifactregistry.googleapis.com",
+    "cloudbuild.googleapis.com",
+    "cloudfunctions.googleapis.com",
     "compute.googleapis.com",
     "container.googleapis.com",
     "dataproc.googleapis.com",
@@ -104,7 +106,6 @@ module "notifications" {
   project_id               = var.project_id
   region                   = var.region
   name_prefix              = var.name_prefix
-  notification_image       = var.notification_image
   deletion_protection      = var.deletion_protection
   eventarc_subscription_id = var.eventarc_subscription_id
 
