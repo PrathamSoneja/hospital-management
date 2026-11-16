@@ -20,15 +20,21 @@ Use a fresh pool ID each run, e.g. `DEMO-ICU-<time>`.
 
 ## 1. Platform: Ruchir (IaC, GitOps; Patient Registry, Staff Scheduler)
 
-1. `infra/terraform`: modules for the VPC, GKE, Cloud SQL, Firestore, GCS, Pub/Sub, Eventarc, Cloud Run functions, IAM and
-   Dataproc. Show `terraform state list | head` from the authoritative state.
+1. `infra/terraform`: modules for the VPC, GKE, Cloud SQL, Firestore (database and composite indexes), GCS, Pub/Sub,
+   Eventarc, Cloud Run functions, IAM, Dataproc and Confluent Cloud. Show `terraform state list | head` from the
+   authoritative state (GCS backend).
 2. Argo CD UI or `kubectl -n argocd get applications`: every service comes from Git `master`; there is no `kubectl apply`.
 3. Demo console step 1, "Create beds + on-shift nurse": Staff Scheduler (Firestore) gets a nurse with a shift.
 4. Step 2, "Admit synthetic patient": Patient Registry writes to Cloud SQL and returns an admission ID.
    Expected: the status strip shows all services green.
-5. Public URL: open `http://<ingress-ip>/docs` in a browser. Create a synthetic patient (`POST /api/v1/patients`
-   with `first_name`, `last_name`, `date_of_birth`), read it back (`GET /api/v1/patients/{id}`) and open an admission
-   (`POST /api/v1/admissions`). `/healthz` returns `{"status":"ok"}`; `/metrics` returns 404.
+5. Public URL: open `http://<ingress-ip>/docs` in a browser (today `http://35.244.157.132/docs`; check with
+   `kubectl -n hospital-system get ingress`). Create a synthetic patient (`POST /api/v1/patients` with `first_name`,
+   `last_name`, `date_of_birth`), read it back (`GET /api/v1/patients/{id}`) and open an admission
+   (`POST /api/v1/admissions`). Every POST needs an **`Idempotency-Key`** header (any unique string; `/docs` shows the
+   field). Without it the API answers 400 `INVALID_ARGUMENT`; repeating the same key returns the same result.
+   `/healthz` returns `{"status":"ok"}`; `/metrics` and `/readyz` return 404 (not routed publicly).
+6. Object storage: in `/docs`, `POST /api/v1/patients/{id}/documents` with `document_type=REFERRAL_LETTER` and a small
+   synthetic PDF; then `gcloud storage ls gs://hospital-patient-docs-514618/patient-documents/` shows the object.
 
 ## 2. Allocation and scaling: Pratham (Bed Allocation, Triage; HPA, observability)
 
@@ -48,17 +54,22 @@ Use a fresh pool ID each run, e.g. `DEMO-ICU-<time>`.
 
 1. `kubectl -n hospital-system get pods -l app=zookeeper` shows 3 ensemble members;
    `kubectl -n hospital-system get pods -l app=lock-coordinator` shows 2 replicas.
-2. During the concurrent allocation: the Lock Coordinator logs show queued acquires with increasing fencing tokens.
+2. During the concurrent allocation: the Lock Coordinator logs show `lock_granted` events for the pool with
+   strictly increasing fencing tokens and growing `waited=` times (the second and third allocation queue behind the
+   first), each followed by `lock_released`:
+   `kubectl -n hospital-system logs -l app=lock-coordinator --since=5m | grep <pool>`.
    Grafana: "Lock Coordinator: acquire outcomes".
-3. Notification: Cloud Run functions → `hospital-notification-fn` → Logs show `staff_notification` lines for each allocation
-   and release. Explain Pub/Sub → Eventarc, event-ID dedup, and the DLQ after 10 attempts.
+3. Notification: Logs Explorer, `resource.type="cloud_run_revision" resource.labels.service_name="hospital-notification-fn"`
+   shows a `staff_notification` line for each allocation, waitlisting and release of the pool. Explain Pub/Sub →
+   Eventarc, event-ID dedup, and the DLQ (`bed-notifications-dlq`) after 10 attempts with 10–600 s backoff.
 
 ## 4. Data and analytics: Jay (Bed Registry; Resource Analytics + Flink)
 
 1. Bed Registry fencing: a stale token is rejected (`docs/member_d_viva_qa.md`, "STALE FENCING REJECTION").
-2. Phase 2 (after Confluent): Confluent topic `bed-events` receives allocation events; the Flink job
-   `hospital-bed-stats-1m` is RUNNING in the Flink UI; `bed-stats` gets one record per pool per minute; the demo
-   console's analytics panel shows the windows.
+2. Kafka (Confluent Cloud, cluster `pkc-41p56`): topic `bed-events` receives every allocation event (Allocation
+   writes both Pub/Sub and Kafka through the outbox); the Flink job `hospital-bed-stats-1m` is RUNNING in the Flink
+   UI on Dataproc; `bed-stats` gets one record per pool per minute; Resource Analytics stores them in Firestore
+   `pool_stats` and the demo console's analytics panel shows the windows.
 
 ## Reset after each run
 

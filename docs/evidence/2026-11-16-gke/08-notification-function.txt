@@ -1,0 +1,14 @@
+# Notification Cloud Run function (Eventarc on Pub/Sub bed-notifications), pool DEMO-C91B24 (2026-11-16T15:43:52Z)
+2026-11-16T15:42:12.255597Z	staff_notification			[DEMO-C91B24] Bed DEMO-C91B24-bed-1 in ward W allocated to admission adm-b20488197bad43adaa03fdb7c33871b9.
+2026-11-16T15:42:13.233581Z	staff_notification			[DEMO-C91B24] Bed DEMO-C91B24-bed-2 in ward W allocated to admission adm-f94216bf699c4f728d7d5c3b1c48aa9e.
+2026-11-16T15:42:14.277787Z	staff_notification			[DEMO-C91B24] Admission adm-c03b5973f889492b83aa2bbe5bbb4659 waitlisted: no bed free in this pool.
+2026-11-16T15:42:16.380740Z	staff_notification			[DEMO-C91B24] Bed DEMO-C91B24-bed-2 in ward W released by admission adm-f94216bf699c4f728d7d5c3b1c48aa9e.
+2026-11-16T15:42:17.415607Z	staff_notification			[DEMO-C91B24] Bed DEMO-C91B24-bed-2 in ward W allocated to admission adm-c03b5973f889492b83aa2bbe5bbb4659.
+
+# Subscription delivery policy
+deadLetterPolicy:
+  deadLetterTopic: projects/hospital-management-514618/topics/bed-notifications-dlq
+  maxDeliveryAttempts: 10
+retryPolicy:
+  maximumBackoff: 600s
+  minimumBackoff: 10s

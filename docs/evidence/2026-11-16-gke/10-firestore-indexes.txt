@@ -1,0 +1,4 @@
+# Firestore composite indexes (Terraform module firestore) (2026-11-16T15:43:52Z)
+NAME          STATE  COLLECTION_GROUP  FIELD_PATH
+CICAgOi3kJAJ  READY                    pool_id,window_start,__name__
+CICAgOjXh4EK  READY                    pool_id,triage_level,queued_at,entry_id,__name__

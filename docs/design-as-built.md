@@ -13,27 +13,27 @@ flowchart LR
     OP[Operator laptop<br/>kubectl via GKE DNS endpoint]
   end
   subgraph GCP["GCP · asia-south1"]
-    LB[External HTTP LB<br/>GKE Ingress]
+    LB[External HTTP LB<br/>GKE Ingress 35.244.157.132]
     subgraph GKE["GKE hospital-gke (zonal, private nodes, 2× e2-standard-4)"]
       ARGO[Argo CD]
       subgraph NS["namespace hospital-system"]
-        PR[Patient Registry]; SS[Staff Scheduler]; BR[Bed Registry]; TR[Triage]
+        PR[Patient Registry]; SS[Staff Scheduler]; BR[Bed Registry]; TR[Triage ×2–6 HPA]
         BA[Bed Allocation ×2–10 HPA]; LC[Lock Coordinator ×2]; ZK[(ZooKeeper ×3)]
         RA[Resource Analytics]; UI[Demo UI · private]; GF[Grafana + GMP query frontend]
       end
     end
     SQL[(Cloud SQL Postgres 16<br/>private IP: patients, beds, allocations)]
-    FS[(Firestore Native)]
+    FS[(Firestore Native<br/>+ composite indexes)]
     GCS[(GCS: patient docs, Flink artifacts)]
     PS[[Pub/Sub bed-notifications<br/>+ DLQ]]
     EA[Eventarc trigger]
     CR[Cloud Run function:<br/>Notification]
-    DP[Dataproc Flink<br/>single node · deferred]
+    DP[Dataproc Flink 1.15<br/>single node]
     SM[Secret Manager]
     AR[Artifact Registry]
     MON[Managed Prometheus + Cloud Logging]
   end
-  CC[(Confluent Cloud Kafka<br/>bed-events → bed-stats · deferred)]
+  CC[(Confluent Cloud Kafka<br/>Standard cluster, GCP asia-south1<br/>bed-events → bed-stats)]
   U --> LB --> PR
   OP --> ARGO
   ARGO -. syncs from GitHub master .-> NS
@@ -43,7 +43,7 @@ flowchart LR
   PR --> GCS
   NS -. images .- AR
   NS -. CSI secrets .- SM
-  BA -. bed-events (pending until Kafka) .-> CC --> DP --> CC --> RA
+  BA -- bed-events --> CC --> DP -- bed-stats --> CC --> RA
   NS -. metrics/logs .-> MON
 ```
 
@@ -86,19 +86,20 @@ sequenceDiagram
 | Lock Coordinator | Nisarg | gRPC :50051, REST :8000 | ZooKeeper :2181 | ZooKeeper PVCs |
 | Notification | Nisarg | Cloud Run function `hospital-notification-fn` (Eventarc on Pub/Sub `bed-notifications`) | — | Firestore (dedup, gaps) |
 | Bed Registry | Jay | REST :8000, gRPC :50053 | — | Cloud SQL `beds` |
-| Resource Analytics | Jay | REST :8008 | Kafka `bed-stats` (deferred) | Firestore `pool_stats` |
-| Bed Allocation | Pratham | REST :8000 | PR (REST); Triage, Lock, Bed, Staff (gRPC); Pub/Sub; Kafka (deferred) | Cloud SQL `allocations` |
+| Resource Analytics | Jay | REST :8008 | Kafka `bed-stats` | Firestore `pool_stats` |
+| Bed Allocation | Pratham | REST :8000 | PR (REST); Triage, Lock, Bed, Staff (gRPC); Pub/Sub; Kafka `bed-events` | Cloud SQL `allocations` |
 | Triage | Pratham | REST :8000, gRPC :50051 | — | Firestore (`waitlist_admission_index`) |
 | Flink job | Jay | — | Kafka `bed-events` → `bed-stats` | GCS checkpoints |
 
 Communication mechanisms used: REST (clients, Patient Registry), gRPC (all internal calls on the allocation path),
-message queues (Pub/Sub now; Kafka for analytics).
+message queues (Pub/Sub for notifications; Kafka for analytics).
 
 ## 4. Differences from the plan (record these in the report)
 
-1. **Delivery phases.** Confluent Cloud Kafka and the Flink job are provisioned in a second phase. Until then
-   Allocation runs `OUTBOX_DESTINATIONS=pubsub`: Kafka events are written and kept pending, never dropped
-   (`docs/kafka-enable/CHECKLIST.md`).
+1. **Delivery phases.** Confluent Cloud Kafka was provisioned in a second phase (a Standard cluster on GCP
+   asia-south1, managed by Terraform). Until then Allocation ran `OUTBOX_DESTINATIONS=pubsub` and kept Kafka events
+   pending; since PR #22 it publishes to both, and the backlog drained to zero. Events from before the switch arrive
+   late for their original Flink windows (known limitation).
 2. **Dataproc** is a single-node cluster (2 vCPU) to fit the 12-vCPU project quota next to two GKE nodes.
 3. **Bed Registry** uses a migration identity (`bed_registry_migrator`) and a DML-only runtime role; it no longer
    creates tables at startup in GKE.
@@ -114,6 +115,11 @@ message queues (Pub/Sub now; Kafka for analytics).
    real APIs.
 8. **Requirement (b).** Notification is a Cloud Run function (2nd gen, `hospital-notification-fn`, PR #19), triggered
    through Eventarc by Pub/Sub `bed-notifications`, with `bed-notifications-dlq` after 10 attempts.
+9. **Firestore indexes.** The waitlist query (Triage) and the analytics history query need composite indexes, managed
+   in Terraform (`modules/firestore`). The plan did not list them; the emulator used in tests does not require them.
+10. **Idempotency.** Every POST requires an `Idempotency-Key` header, including on the public API.
+11. **Network access.** The Dataproc master is reached only through IAP SSH (firewall rule tagged `dataproc`); the
+    project's `default` network was deleted.
 
 ## 5. Design rationale (short form; the full text is in the design document)
 

@@ -1,0 +1,17 @@
+# Transactional outbox and Kafka (2026-11-16T15:43:52Z)
+## pod/bed-allocation-service-57f6b6fd95-8mg96
+pubsub,kafka
+pkc-41p56.asia-south1.gcp.confluent.cloud:9092
+bed-events
+outbox_pending_events{destination="pubsub",service="bed-allocation"} 0.0
+outbox_pending_events{destination="kafka",service="bed-allocation"} 0.0
+## pod/bed-allocation-service-57f6b6fd95-pkjvk
+pubsub,kafka
+pkc-41p56.asia-south1.gcp.confluent.cloud:9092
+bed-events
+outbox_pending_events{destination="pubsub",service="bed-allocation"} 0.0
+outbox_pending_events{destination="kafka",service="bed-allocation"} 0.0
+
+## Resource Analytics consumer
+{"timestamp": "2026-11-16T15:28:50.842616+00:00", "severity": "INFO", "service": "resource-analytics-service", "event": "Subscribed to Kafka topic: bed-stats", "message": "Subscribed to Kafka topic: bed-stats"}
+%6|1794842931.073|GETSUBSCRIPTIONS|rdkafka#consumer-1| [thrd:main]: Telemetry client instance id changed from AAAAAAAAAAAAAAAAAAAAAA to EoqB0ziwSKG6bRIyJY3MrQ

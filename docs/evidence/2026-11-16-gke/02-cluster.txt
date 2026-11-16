@@ -1,0 +1,33 @@
+# Nodes, pods, HPAs, ingress (2026-11-16T15:42:40Z)
+NAME                                                  STATUS   ROLES    AGE     VERSION               INTERNAL-IP   EXTERNAL-IP   OS-IMAGE                             KERNEL-VERSION      CONTAINER-RUNTIME
+gke-hospital-gke-hospital-gke-primary-65934976-mlgk   Ready    <none>   2d11h   v1.36.4-gke.2377000   10.10.0.12    <none>        Container-Optimized OS from Google   6.12.110+ (amd64)   containerd://2.2.7
+gke-hospital-gke-hospital-gke-primary-65934976-xv2r   Ready    <none>   45m     v1.36.4-gke.2377000   10.10.0.38    <none>        Container-Optimized OS from Google   6.12.110+ (amd64)   containerd://2.2.7
+
+NAME                                         READY   STATUS      RESTARTS   AGE   IP           NODE                                                  NOMINATED NODE   READINESS GATES
+allocation-migrate-20261031-04-mfmg5         0/2     Completed   0          45m   10.20.0.61   gke-hospital-gke-hospital-gke-primary-65934976-mlgk   <none>           <none>
+bed-allocation-service-57f6b6fd95-8mg96      2/2     Running     0          14m   10.20.1.11   gke-hospital-gke-hospital-gke-primary-65934976-xv2r   <none>           <none>
+bed-allocation-service-57f6b6fd95-pkjvk      2/2     Running     0          13m   10.20.1.12   gke-hospital-gke-hospital-gke-primary-65934976-xv2r   <none>           <none>
+bed-registry-service-59b5fc748-ptg2g         2/2     Running     0          45m   10.20.0.59   gke-hospital-gke-hospital-gke-primary-65934976-mlgk   <none>           <none>
+bed-registry-service-59b5fc748-xnknb         2/2     Running     0          45m   10.20.0.60   gke-hospital-gke-hospital-gke-primary-65934976-mlgk   <none>           <none>
+demo-ui-767d796dd7-gjsfc                     1/1     Running     0          43m   10.20.1.8    gke-hospital-gke-hospital-gke-primary-65934976-xv2r   <none>           <none>
+gmp-frontend-56d67b6d5f-bz4k7                1/1     Running     0          86m   10.20.0.40   gke-hospital-gke-hospital-gke-primary-65934976-mlgk   <none>           <none>
+grafana-7cfb99d4b4-dtxsv                     1/1     Running     0          86m   10.20.0.41   gke-hospital-gke-hospital-gke-primary-65934976-mlgk   <none>           <none>
+lock-coordinator-5ff6849b75-ln9v4            1/1     Running     0          55m   10.20.0.49   gke-hospital-gke-hospital-gke-primary-65934976-mlgk   <none>           <none>
+lock-coordinator-5ff6849b75-v2fl7            1/1     Running     0          54m   10.20.0.52   gke-hospital-gke-hospital-gke-primary-65934976-mlgk   <none>           <none>
+patient-registry-7f6c756459-sw82p            2/2     Running     0          54m   10.20.0.53   gke-hospital-gke-hospital-gke-primary-65934976-mlgk   <none>           <none>
+patient-registry-7f6c756459-wlfxn            2/2     Running     0          54m   10.20.0.54   gke-hospital-gke-hospital-gke-primary-65934976-mlgk   <none>           <none>
+resource-analytics-service-d8769d9ff-sljd6   1/1     Running     0          14m   10.20.1.10   gke-hospital-gke-hospital-gke-primary-65934976-xv2r   <none>           <none>
+staff-scheduler-5dfd857b-6p2wc               1/1     Running     0          55m   10.20.0.48   gke-hospital-gke-hospital-gke-primary-65934976-mlgk   <none>           <none>
+staff-scheduler-5dfd857b-wsddb               1/1     Running     0          54m   10.20.0.51   gke-hospital-gke-hospital-gke-primary-65934976-mlgk   <none>           <none>
+triage-service-5f7fc86789-6cpwj              1/1     Running     0          45m   10.20.0.58   gke-hospital-gke-hospital-gke-primary-65934976-mlgk   <none>           <none>
+triage-service-5f7fc86789-6sdvh              1/1     Running     0          46m   10.20.0.55   gke-hospital-gke-hospital-gke-primary-65934976-mlgk   <none>           <none>
+zookeeper-0                                  1/1     Running     0          91m   10.20.0.33   gke-hospital-gke-hospital-gke-primary-65934976-mlgk   <none>           <none>
+zookeeper-1                                  1/1     Running     0          91m   10.20.0.34   gke-hospital-gke-hospital-gke-primary-65934976-mlgk   <none>           <none>
+zookeeper-2                                  1/1     Running     0          91m   10.20.0.32   gke-hospital-gke-hospital-gke-primary-65934976-mlgk   <none>           <none>
+
+NAME                 REFERENCE                           TARGETS       MINPODS   MAXPODS   REPLICAS   AGE
+bed-allocation-hpa   Deployment/bed-allocation-service   cpu: 7%/60%   2         10        2          46m
+triage-hpa           Deployment/triage-service           cpu: 4%/60%   2         6         2          46m
+
+NAME                      CLASS    HOSTS   ADDRESS          PORTS   AGE
+patient-registry-public   <none>   *       35.244.157.132   80      54m

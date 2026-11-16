@@ -1,0 +1,18 @@
+# Demo flow through the private demo console (kubectl port-forward svc/demo-ui), synthetic data, 2026-11-16T15:41:56Z
+status {'patients': True, 'staff': True, 'triage': True, 'allocation': True, 'beds': True, 'analytics': True}
+pool DEMO-C91B24
+bed 201
+bed 201
+staff 201
+shift 200
+admit 1 201 201 200
+admit 2 201 201 200
+admit 3 201 201 200
+concurrent [(201, 'ALLOCATED', 'DEMO-C91B24-bed-2', None), (201, 'WAITLISTED', None, None), (201, 'ALLOCATED', 'DEMO-C91B24-bed-1', None)]
+repeat same key -> same allocation: True 201
+waitlist ['adm-c03b5973f889492b83aa2bbe5bbb4659']
+release 200 RELEASED
+waitlisted admission promoted
+final [('ALLOCATED', 'DEMO-C91B24-bed-1'), ('ALLOCATED', 'DEMO-C91B24-bed-2'), ('RELEASED', 'DEMO-C91B24-bed-2')]
+beds []   # GET /api/v1/beds lists AVAILABLE beds only: both beds are occupied at the end, so the list is empty
+CLOUD DEMO E2E DONE
