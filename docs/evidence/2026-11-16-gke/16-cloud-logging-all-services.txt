@@ -1,0 +1,51 @@
+# Centralized logging: Cloud Logging receives every microservice, the serverless function and the Dataproc Flink job (2026-11-16T17:03:29Z)
+# Query: resource.type=("k8s_container" OR "cloud_run_revision" OR "cloud_dataproc_cluster"), last 2 hours
+
+## Entries per source (application services marked *)
+*     407 k8s_container	patient-registry		hospital-gke
+*     255 cloud_dataproc_cluster			hospital-dataproc-flink
+*     184 k8s_container	triage		hospital-gke
+*     166 k8s_container	staff-scheduler		hospital-gke
+*     151 k8s_container	bed-allocation		hospital-gke
+*     149 k8s_container	bed-registry		hospital-gke
+*     131 k8s_container	zookeeper		hospital-gke
+*      91 k8s_container	demo-ui		hospital-gke
+*      79 k8s_container	resource-analytics		hospital-gke
+*      34 k8s_container	lock-coordinator		hospital-gke
+*      17 cloud_run_revision		hospital-notification-fn	
+
+## patient-registry (latest structured entry)
+2026-11-16T17:00:33.488201018Z	admission_record_written	Admission record created or replayed
+
+## staff-scheduler (latest structured entry)
+2026-11-16T17:03:17.085146146Z	grpc_server_started	Staff Scheduler gRPC server started
+
+## bed-allocation (latest structured entry)
+2026-11-16T17:00:36.903901111Z	allocation_settled	allocation WAITLISTED
+
+## triage (latest structured entry)
+2026-11-16T17:03:11.809947890Z	triage_grpc_peek_next	triage_grpc_peek_next
+
+## lock-coordinator (latest structured entry)
+2026-11-16T17:03:13.673325948Z	Lock Coordinator listening on port 50051	Lock Coordinator listening on port 50051
+
+## bed-registry (latest structured entry)
+2026-11-16T17:00:48.150263128Z	bed_allocated_successfully	bed_allocated_successfully
+
+## resource-analytics (latest structured entry)
+2026-11-16T16:46:05.588703579Z	Kafka consumer stopped gracefully.	Kafka consumer stopped gracefully.
+
+## hospital-notification-fn (Cloud Run function)
+2026-11-16T17:00:49.473320Z	[DEMO-ICU-1700] Bed DEMO-ICU-1700-bed-01 in ward DEMO-ICU-1700-WARD allocated to admission adm-b52dbd42da62425abc3c7046f113e378.
+2026-11-16T17:00:48.406775Z	[DEMO-ICU-1700] Bed DEMO-ICU-1700-bed-01 in ward DEMO-ICU-1700-WARD released by admission adm-d8bd40b1ac5346b2af1fcc579d2bd2e5.
+
+## Dataproc Flink job hospital-bed-stats-1m (yarn-userlogs: jobmanager/taskmanager)
+2026-11-16T16:08:59.779750625Z	2026-11-16 16:08:59,573 INFO  org.apache.flink.runtime.executiongraph.ExecutionGraph       [] - Job hospital-bed-stats-1m (505a26121f69a8e91e17f84c8e71ca51) switched from state CREATED to RUNNING.
+2026-11-16T16:10:16.775911552Z	2026-11-16 16:10:16,016 INFO  org.apache.flink.runtime.checkpoint.CheckpointCoordinator    [] - Completed checkpoint 1 for job 505a26121f69a8e91e17f84c8e71ca51 (39819 bytes, checkpointDuration=3757 ms, finaliz
+2026-11-16T16:11:13.776723294Z	2026-11-16 16:11:13,729 INFO  org.apache.flink.runtime.checkpoint.CheckpointCoordinator    [] - Completed checkpoint 2 for job 505a26121f69a8e91e17f84c8e71ca51 (39819 bytes, checkpointDuration=1012 ms, finaliz
+2026-11-16T16:12:13.776576617Z	2026-11-16 16:12:13,631 INFO  org.apache.flink.runtime.checkpoint.CheckpointCoordinator    [] - Completed checkpoint 3 for job 505a26121f69a8e91e17f84c8e71ca51 (39819 bytes, checkpointDuration=1131 ms, finaliz
+2026-11-16T16:13:13.776839974Z	2026-11-16 16:13:13,529 INFO  org.apache.flink.runtime.checkpoint.CheckpointCoordinator    [] - Completed checkpoint 4 for job 505a26121f69a8e91e17f84c8e71ca51 (39819 bytes, checkpointDuration=1046 ms, finaliz
+2026-11-16T16:14:13.776029640Z	2026-11-16 16:14:13,411 INFO  org.apache.flink.runtime.checkpoint.CheckpointCoordinator    [] - Completed checkpoint 5 for job 505a26121f69a8e91e17f84c8e71ca51 (39819 bytes, checkpointDuration=932 ms, finaliza
+2026-11-16T16:14:33.794690346Z	2026-11-16 16:14:33,376 INFO  org.apache.flink.runtime.executiongraph.ExecutionGraph       [] - Job hospital-bed-stats-1m (505a26121f69a8e91e17f84c8e71ca51) switched from state RUNNING to SUSPENDED.
+
+Note: the Flink YARN session was stopped at 16:14:34 UTC (container killed by an external signal); the job must be resubmitted before the demo.
