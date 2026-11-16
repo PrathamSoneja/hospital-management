@@ -16,6 +16,8 @@ synthetic patient, admission and PDF through the public API. No credentials appe
 | `09-kafka-outbox.txt` | Allocation publishing to Pub/Sub and Kafka with an empty outbox backlog; Analytics subscribed to `bed-stats` | b (Kafka), e |
 | `10-firestore-indexes.txt` | Terraform-managed Firestore composite indexes READY | a, g |
 | `11-hpa-load-test.txt` | k6 load test: Bed Allocation 2→5 and Triage 2→4 replicas, 100 % checks, p95 4.9 s (above the 3 s threshold) | c |
+| `12-grafana-dashboard-load-test-1.png` | Grafana dashboard (last 6 h, load test at about 21:45–22:00 IST): RPS, 5xx error rate, p50/p95 latency, allocation outcomes, lock wait duration | h, c |
+| `13-grafana-dashboard-load-test-2.png` | Grafana dashboard continued: outbox backlog, HPA current vs desired replicas, pod CPU and memory, Kubernetes available replicas and restarts | c, h |
 
-Still to add (screenshots): Flink job and `bed-stats` records (Jay), notification synthetic checks (Nisarg), Grafana
-dashboards (Pratham), `terraform state list` and the Argo CD UI (Ruchir).
+Still to add here (screenshots): Flink job and `bed-stats` records (Jay); Nisarg's and Ruchir's screenshots (taken,
+not yet committed); the demo console flow and a Cloud Logging query (Pratham).
