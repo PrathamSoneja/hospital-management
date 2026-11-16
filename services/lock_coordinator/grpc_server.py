@@ -12,10 +12,25 @@ from services.lock_coordinator import zk_store
 from services.lock_coordinator.metrics import MetricsInterceptor, record_acquire, record_reap
 from services.lock_coordinator.rest import build_app
 from shared.generated import lock_pb2, lock_pb2_grpc
+from shared.observability.logging import setup_logger
 
-logger = logging.getLogger("lock-coordinator")
+# Structured JSON logs (the team's shared format), so Cloud Logging can filter on event and pool_id.
+logger = setup_logger("lock-coordinator")
 
 REAPER_INTERVAL_S = 0.5
+
+
+def _request_id(context):
+    """The caller's x-request-id, so a lock log line can be matched to the allocation that caused it."""
+    try:
+        metadata = dict((item.key.lower(), item.value) for item in context.invocation_metadata())
+    except (AttributeError, RuntimeError):
+        metadata = {}
+    return metadata.get("x-request-id")
+
+
+def _pool_of(lock_id):
+    return lock_id.split("/", 1)[0] if "/" in lock_id else None
 
 
 class LockCoordinatorServicer(lock_pb2_grpc.LockCoordinatorServicer):
@@ -36,6 +51,10 @@ class LockCoordinatorServicer(lock_pb2_grpc.LockCoordinatorServicer):
         if not zk_store.wait_for_turn(self.zk, request.pool_id, path, request.wait_timeout_ms / 1000):
             zk_store.leave_queue(self.zk, path)  # Never block the requests behind us.
             record_acquire(request.pool_id, "timeout")
+            logger.warning(
+                f"lock wait timeout: pool={request.pool_id} owner={request.owner_id} after {request.wait_timeout_ms} ms",
+                extra={"event": "lock_wait_timeout", "pool_id": request.pool_id, "request_id": _request_id(context)},
+            )
             context.abort(grpc.StatusCode.DEADLINE_EXCEEDED, "lock wait timeout")
 
         expires_at = zk_store.start_lease(self.zk, path)
@@ -43,12 +62,18 @@ class LockCoordinatorServicer(lock_pb2_grpc.LockCoordinatorServicer):
             context.abort(grpc.StatusCode.UNAVAILABLE, "lock was lost before it could be granted")
 
         lock_wait_ms = zk_store.now_ms() - started
+        token = zk_store.fencing_token(self.zk, path)
         record_acquire(request.pool_id, "granted", lock_wait_ms)
+        logger.info(
+            f"lock granted: pool={request.pool_id} owner={request.owner_id} token={token} waited={lock_wait_ms} ms",
+            extra={"event": "lock_granted", "pool_id": request.pool_id, "duration_ms": lock_wait_ms,
+                   "request_id": _request_id(context)},
+        )
         return lock_pb2.AcquireLockResponse(
             lock_id=zk_store.lock_id_for(path),
             pool_id=request.pool_id,
             owner_id=request.owner_id,
-            fencing_token=zk_store.fencing_token(self.zk, path),
+            fencing_token=token,
             expires_at=expires_at,
             lock_wait_ms=lock_wait_ms,
         )
@@ -58,11 +83,24 @@ class LockCoordinatorServicer(lock_pb2_grpc.LockCoordinatorServicer):
         expires_at = None
         if path is not None and request.lease_ms > 0:
             expires_at = zk_store.renew_lease(self.zk, path, request.owner_id, request.lease_ms)
+        if expires_at is None:
+            # Successful renewals are frequent, so only refusals are logged.
+            logger.warning(
+                f"lock renew refused: lock={request.lock_id} owner={request.owner_id}",
+                extra={"event": "lock_renew_refused", "pool_id": _pool_of(request.lock_id),
+                       "request_id": _request_id(context)},
+            )
         return lock_pb2.RenewLockResponse(success=expires_at is not None, expires_at=expires_at or 0)
 
     def Release(self, request, context):
         path = zk_store.path_for(request.lock_id)
         success = path is not None and zk_store.release(self.zk, path, request.owner_id)
+        logger.log(
+            logging.INFO if success else logging.WARNING,
+            f"lock {'released' if success else 'release not confirmed'}: lock={request.lock_id} owner={request.owner_id}",
+            extra={"event": "lock_released" if success else "lock_release_not_confirmed",
+                   "pool_id": _pool_of(request.lock_id), "request_id": _request_id(context)},
+        )
         return lock_pb2.ReleaseLockResponse(success=success)
 
     def Validate(self, request, context):
