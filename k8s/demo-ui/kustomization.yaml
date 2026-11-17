@@ -8,4 +8,4 @@ resources:
 images:
   - name: demo-ui
     newName: asia-south1-docker.pkg.dev/hospital-management-514618/hospital-repo/demo-ui
-    digest: sha256:b1c6f3e1360d8d4b63d86b96349a7654720d4500943f3e90da95ec95a20a328d
+    digest: sha256:9436615fd9945721066f6293ae88d472aa59cf1429b9f6663f94126782d29f72
