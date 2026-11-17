@@ -22,6 +22,12 @@ synthetic patient, admission and PDF through the public API. No credentials appe
 | `15-demo-console-request-log.json` | The console's request log and final state for that run | f |
 | `17-grafana-lock-coordinator-after-netpol-fix.png` | Grafana after PR #29 (NetworkPolicies admit `gmp-system`): "Lock Coordinator: Acquire Outcomes" now shows granted acquires, and the Lock Coordinator appears in RPS and latency | f, h |
 | `16-cloud-logging-all-services.txt` | Cloud Logging: entries from all eight services, the Cloud Run function and the Dataproc Flink job (JobManager/TaskManager, checkpoints) | h |
+| `18-dataproc-cluster.jpg` | Single-node Dataproc cluster `hospital-dataproc-flink` (master `e2-standard-2`, 0 workers) in state `RUNNING` | e |
+| `19-flink-dashboard.png` | Apache Flink Web UI on YARN showing job `hospital-bed-stats-1m` in state `RUNNING` with 0 canceled/failed | e |
+| `20-flink-job-graph.jpg` | Flink streaming SQL execution graph: `bed_events → LocalWindowAggregate → GlobalWindowAggregate → bed_stats` | e |
+| `21-flink-checkpoints.jpg` | Flink Checkpoints tab: 5/5 completed checkpoints stored in `gs://hospital-flink-514618/checkpoints/` (exactly-once mode) | e, g |
+| `22-confluent-bed-events.jpg` | Confluent Cloud Managed Kafka: topic `bed-events` (3 partitions) with active consumer `flink-resource-analytics` | b (Kafka), e |
+| `23-confluent-bed-stats.jpg` | Confluent Cloud Managed Kafka: results topic `bed-stats` (3 partitions) with active consumer `resource-analytics-consumer` | b (Kafka), e |
+| `24-firestore-pool-stats.jpg` | Firestore collection `pool_stats`: 1-minute tumbling window metrics documents (`allocated`, `waitlisted`, `conflicts`, `contention_rate`, `average_lock_wait_ms`) persisted by Resource Analytics | e, g |
 
-Still to add here (screenshots): Flink job and `bed-stats` records (Jay); Nisarg's and Ruchir's screenshots (taken,
-not yet committed).
+Still to add here (screenshots): Nisarg's and Ruchir's screenshots (taken, not yet committed).
