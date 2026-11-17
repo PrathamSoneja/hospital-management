@@ -10,13 +10,13 @@ Last updated: 2026-11-16.
 | # | Item | Owner | Status | How / notes |
 |---|---|---|---|---|
 | 1 | HPA load test evidence | Pratham | DONE | `docs/evidence/2026-11-16-gke/11-hpa-load-test.txt`: scale-out shown, all checks passed; the k6 p95 threshold (3 s) was missed (4.9 s), see §3 |
-| 2 | Flink job running and evidence | Jay | TODO — **job not staying up**: each Flink YARN session received SIGTERM from outside ("closed externally", exit 143) at 16:14 and 17:14 UTC. Submit with the repo script from Cloud Shell (detached), confirm RUNNING after 3+ minutes, then capture | Screenshots: Flink UI job RUNNING with checkpoints, Confluent `bed-events` and `bed-stats` messages, Firestore `pool_stats`, Dataproc logs. Guide §B.5 |
-| 3 | Notification function checks | Nisarg | TAKEN — add the screenshots to `docs/evidence/2026-11-16-gke/` | Synthetic handled / duplicate / malformed events on pool `NISARG-TEST`; DLQ configuration. Guide §B.4 |
+| 2 | Flink job running and evidence | Jay | DONE | `18-` … `24-*` (Dataproc, Flink job RUNNING, job graph, checkpoints, Confluent `bed-events`/`bed-stats`, Firestore `pool_stats`). Resubmit before the demo (§2) |
+| 3 | Notification function checks | Nisarg | DONE | `25-` … `32-*` (real events, handled/duplicate/rejected, DLQ policy, lock grants) and `../2026-11-13-local-zookeeper/` (failover) |
 | 4 | Grafana dashboard screenshots | Pratham | DONE | `12-` and `13-grafana-dashboard-load-test-*.png`. The Lock Coordinator panel had no data because its NetworkPolicies blocked Managed Prometheus (`gmp-system`); fixed in PR #29, verified in `17-grafana-lock-coordinator-after-netpol-fix.png` |
 | 4b | Demo console flow and a Cloud Logging query (all services + the Dataproc job) | Pratham | DONE | `14-demo-0*.png`, `15-demo-console-request-log.json`, `16-cloud-logging-all-services.txt` |
-| 5 | Platform evidence | Ruchir | TAKEN — add the screenshots to `docs/evidence/2026-11-16-gke/` | `terraform state list`, Argo CD UI (all Synced/Healthy), Staff Scheduler data in Firestore, Cloud SQL rows. Guide §B.1 |
-| 6 | Export diagrams | Anyone | TODO | Paste the Mermaid blocks of `docs/PROJECT.md` §4 into mermaid.live, export PNG |
-| 7 | Update the design document | Nisarg (author) | TODO | Add the diagrams and `docs/PROJECT.md` §13 "Differences from the design document" to `cloud_proj_plan.docx` |
+| 5 | Platform evidence | Ruchir | DONE | `33-`/`34-argocd-*`, `35-cloud-sql-patients-rows.jpeg`, `36-terraform-state-list.txt` |
+| 6 | Diagrams | Nisarg | DONE | In `cloud_proj_plan.docx` (3 figures, PR #33) |
+| 7 | Update the design document | Nisarg | DONE | `cloud_proj_plan.docx` rewritten as built (PR #33): Confluent Standard, Cloud Run function, single-node Dataproc, public `/docs` |
 | 8 | Confirm `task_divison.txt` | Everyone | DONE | Member A corrected to "Ruchir Kumar" (roster and detail section); IDs unchanged |
 | 9 | Viva preparation | Everyone | TODO | Each member: their two requirements and two services, `docs/RUN-DEMO-VIVA.md` Part C |
 | 10 | Rehearse the demo once end to end | Everyone | TODO | `docs/RUN-DEMO-VIVA.md` Part B, about 20 minutes |

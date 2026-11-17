@@ -37,8 +37,10 @@ synthetic patient, admission and PDF through the public API. No credentials appe
 | `30-firestore-notification-waitlisted-load-test.png` | Firestore `notifications` document from the k6 load test: `ALLOCATION_WAITLISTED`, pool `LOADTEST-A`, `ward: null`, `bed_id: null`, `stream_sequence: 283`, `request_id` `k6-…` | b, c, g |
 | `31-notification-dlq-retry-policy.png` | The function's Eventarc Pub/Sub subscription: dead-letter topic `bed-notifications-dlq` after 10 delivery attempts, retry backoff 10–600 s | b |
 | `32-lock-grants-increasing-tokens-load-test.png` | Logs Explorer, `lock_granted` for pool `LOADTEST-A` during the k6 load test: 1,482 grants; Triage and Bed Allocation take turns on one pool with increasing fencing tokens (`…391` → `…396` → `…397`) and about 5 s queue waits; `request_id` `k6-…` from the caller | f (S7 concept), c, h |
+| `33-argocd-apps-synced-healthy-1.jpeg` | Argo CD UI: Bed Allocation + Triage, Bed Registry, demo UI, monitoring and Resource Analytics Applications `Healthy`/`Synced`, all tracking `master` of this repository (the load-test app shows the k6 run's failed latency threshold) | d, ≥8 services |
+| `34-argocd-apps-synced-healthy-2.jpeg` | Argo CD UI continued: the root app-of-apps (`gitops/apps`) plus Lock Coordinator, Patient Registry and Staff Scheduler, all `Healthy`/`Synced` | d |
+| `35-cloud-sql-patients-rows.jpeg` | Cloud SQL Studio, instance `hospital-postgres`, database `patients`: the five newest rows written by Patient Registry (a synthetic patient and k6 load-test patients) and the migrated tables | g, a |
+| `36-terraform-state-list.txt` | `terraform state list` from the shared GCS backend: 161 resources across the network, GKE, Cloud SQL, Firestore, storage, IAM, notifications, Dataproc and Confluent modules | a |
 
-Still to add here: README rows for Ruchir's files (`argoCD_1.jpeg`, `argoCD_2.jpeg`, `cloud_sql_proof.jpeg`,
-`tf_state_list.txt`).
 
 ZooKeeper failure demo (leader loss, quorum loss) on the local 3-node ensemble: `../2026-11-13-local-zookeeper/`.
