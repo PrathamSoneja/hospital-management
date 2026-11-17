@@ -16,7 +16,7 @@ configMapGenerator:
 images:
   - name: patient-registry
     newName: asia-south1-docker.pkg.dev/hospital-management-514618/hospital-repo/patient-registry
-    digest: sha256:16c84ad5e16d6b2e422954a9c50a618cbde834d9219c669ce54852eb38b99b16
+    digest: sha256:55aa359032a80605290f26c6e3d45d421b1e11f47c8e9bf621f00c8af35a82ea
 patches:
   - target: {kind: ServiceAccount, name: patient-registry-sa}
     patch: |-
