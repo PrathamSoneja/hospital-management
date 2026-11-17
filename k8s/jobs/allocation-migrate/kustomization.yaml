@@ -8,7 +8,7 @@ resources:
 images:
   - name: bed-allocation
     newName: asia-south1-docker.pkg.dev/hospital-management-514618/hospital-repo/bed-allocation
-    digest: sha256:048c9709634a73aeb23130ed58c301ae9aa6f0e96a1c4565c91ea80a103cff9d
+    digest: sha256:1db0cc5a029e0bade453170dab636a76aa5902d55e374dab1c37ca3f05a5af4c
 configMapGenerator:
   - name: allocation-migration-config
     options:
