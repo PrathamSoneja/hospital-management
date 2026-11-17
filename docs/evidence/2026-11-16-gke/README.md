@@ -29,5 +29,16 @@ synthetic patient, admission and PDF through the public API. No credentials appe
 | `22-confluent-bed-events.jpg` | Confluent Cloud Managed Kafka: topic `bed-events` (3 partitions) with active consumer `flink-resource-analytics` | b (Kafka), e |
 | `23-confluent-bed-stats.jpg` | Confluent Cloud Managed Kafka: results topic `bed-stats` (3 partitions) with active consumer `resource-analytics-consumer` | b (Kafka), e |
 | `24-firestore-pool-stats.jpg` | Firestore collection `pool_stats`: 1-minute tumbling window metrics documents (`allocated`, `waitlisted`, `conflicts`, `contention_rate`, `average_lock_wait_ms`) persisted by Resource Analytics | e, g |
+| `25-notification-real-events-logs.png` | Logs Explorer, Cloud Run function `hospital-notification-fn`, pool `DEMO-8E5B93`: five `staff_notification` entries from a real demo run (allocated, allocated, waitlisted, released, then the waitlisted admission gets the freed bed) | b (serverless, Pub/Sub) |
+| `26-notification-streams-demo-pool.png` | Firestore `notification_streams/DEMO-8E5B93`: `highest_sequence: 5`, matching the five events, so no gap | b, g |
+| `27-notification-handled-duplicate-rejected.png` | One synthetic event published twice to `bed-notifications` (pool `NISARG-TEST`): first `staff_notification`, then `notification_duplicate` (deduplicated on `event_id`). A malformed message logs `notification_rejected` (schema check) and is acknowledged, not retried | b |
+| `28-firestore-notification-test-doc.png` | Firestore `notifications/0f0e0d0c-…-000000000001`: the stored synthetic event; the document ID is the `event_id` that deduplication checks | b, g |
+| `29-firestore-notification-streams-test-pool.png` | Firestore `notification_streams/NISARG-TEST`: `highest_sequence: 1` | b, g |
+| `30-firestore-notification-waitlisted-load-test.png` | Firestore `notifications` document from the k6 load test: `ALLOCATION_WAITLISTED`, pool `LOADTEST-A`, `ward: null`, `bed_id: null`, `stream_sequence: 283`, `request_id` `k6-…` | b, c, g |
+| `31-notification-dlq-retry-policy.png` | The function's Eventarc Pub/Sub subscription: dead-letter topic `bed-notifications-dlq` after 10 delivery attempts, retry backoff 10–600 s | b |
+| `32-lock-grants-increasing-tokens-load-test.png` | Logs Explorer, `lock_granted` for pool `LOADTEST-A` during the k6 load test: 1,482 grants; Triage and Bed Allocation take turns on one pool with increasing fencing tokens (`…391` → `…396` → `…397`) and about 5 s queue waits; `request_id` `k6-…` from the caller | f (S7 concept), c, h |
 
-Still to add here (screenshots): Nisarg's and Ruchir's screenshots (taken, not yet committed).
+Still to add here: README rows for Ruchir's files (`argoCD_1.jpeg`, `argoCD_2.jpeg`, `cloud_sql_proof.jpeg`,
+`tf_state_list.txt`).
+
+ZooKeeper failure demo (leader loss, quorum loss) on the local 3-node ensemble: `../2026-11-13-local-zookeeper/`.
