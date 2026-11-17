@@ -6,8 +6,8 @@ divided, how every part works, how it is deployed on Google Cloud, and how each 
 (`docs/261_CC_Assignment_new (1).pdf`) is met. The design document deliverable is `cloud_proj_plan.docx`; §13 lists
 where the built system differs from it.
 
-Companion documents: `docs/RUN-DEMO-VIVA.md` (run, demo, viva) and `docs/REMAINING.md` (what is left before
-submission). Evidence captured from the live system: `docs/evidence/2026-11-16-gke/`.
+Companion document: `docs/RUN-DEMO-VIVA.md` (run, demo, viva). Evidence captured from the live system:
+`docs/evidence/2026-11-16-gke/`.
 
 ---
 

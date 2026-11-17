@@ -75,7 +75,6 @@ Evidence from the live system: [`docs/evidence/2026-11-16-gke/`](docs/evidence/2
 |---|---|
 | [`docs/PROJECT.md`](docs/PROJECT.md) | Everything about the system: team and division of work, requirement coverage, architecture, services, contracts, how it works, IaC, GitOps, observability, security, design decisions, differences from the design document |
 | [`docs/RUN-DEMO-VIVA.md`](docs/RUN-DEMO-VIVA.md) | How to run it (cloud and local), the demo script covering every requirement, viva preparation per member, troubleshooting |
-| [`docs/REMAINING.md`](docs/REMAINING.md) | What is left before submission, with owners |
 | [`cloud_proj_plan.docx`](cloud_proj_plan.docx) | Design document (deliverable) |
 | [`task_divison.txt`](task_divison.txt) | Team members, IDs and task division (deliverable) |
 | [`docs/261_CC_Assignment_new (1).pdf`](<docs/261_CC_Assignment_new (1).pdf>) | The assignment brief |
@@ -110,7 +109,7 @@ monitoring/        Grafana, Managed Prometheus scraping, dashboard and alert rul
 k6/                load test script and in-cluster Job
 tests/             unit, integration and acceptance tests; local sandbox
 scripts/           release gate, digest pinning, smoke tests, demo helpers
-docs/              project document, run/demo/viva guide, remaining work, brief, evidence
+docs/              project document, run/demo/viva guide, brief, evidence
 ```
 
 ## Team

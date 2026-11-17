@@ -2,7 +2,7 @@
 
 How to run the whole system (Part A), the demo script with every requirement of the brief (Part B), viva
 preparation for each member (Part C) and troubleshooting (Part D). What the system is and how it works:
-`docs/PROJECT.md`. What is still open: `docs/REMAINING.md`.
+`docs/PROJECT.md`.
 
 Project `hospital-management-514618`, region `asia-south1`, cluster `hospital-gke` (zone `asia-south1-a`),
 namespace `hospital-system`. Use **synthetic data only**.
