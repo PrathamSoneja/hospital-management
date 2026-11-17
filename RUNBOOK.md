@@ -1,8 +1,7 @@
-# Running, demonstrating and defending the project
+# Runbook: running and demonstrating the project
 
-How to run the whole system (Part A), the demo script with every requirement of the brief (Part B), viva
-preparation for each member (Part C) and troubleshooting (Part D). What the system is and how it works:
-`docs/PROJECT.md`.
+How to run the whole system (Part A), the demo script covering every requirement of the brief (Part B) and
+troubleshooting (Part C). What the system is and how it works: `PROJECT.md`.
 
 Project `hospital-management-514618`, region `asia-south1`, cluster `hospital-gke` (zone `asia-south1-a`),
 namespace `hospital-system`. Use **synthetic data only**.
@@ -25,7 +24,7 @@ The DNS endpoint is IAM-gated, so no IP allowlist or VPN is needed. Every Applic
 ## A.2 Provision the infrastructure (Terraform, Ruchir)
 
 The state lives in `gs://hospital-management-514618-tf-state` (prefix `terraform/state`). Run from
-`infra/terraform` in **one PowerShell session** (see D.1 for why):
+`infra/terraform` in **one PowerShell session** (see Part C, item 1, for why):
 
 ```powershell
 terraform init -backend-config=backend.hcl          # from backend.hcl.example: bucket = "hospital-management-514618-tf-state", prefix = "terraform/state"
@@ -216,111 +215,7 @@ fresh pool ID per run, e.g. `DEMO-ICU-<time>`. Each presenter shows their two re
 
 ---
 
-# Part C — Viva preparation
-
-## C.1 Everyone
-
-- **What does the system guarantee?** No double booking (lock + fencing), fair waiting (urgency then arrival), safe
-  retries (idempotency keys and operation IDs), no lost events (transactional outbox).
-- **Why ZooKeeper?** Ordered ephemeral sequential znodes give a fair queue and automatic release when a holder's
-  session dies; ZAB keeps a consistent view across a 3-node quorum.
-- **What if a lease expires mid-operation?** The next holder gets a higher fencing token; Bed Registry, Staff
-  Scheduler and Triage reject the stale holder's lower token.
-- **Why an outbox?** State and events commit together; brokers never block a lock or a transaction; delivery is
-  at-least-once, so consumers deduplicate by `event_id`.
-- **Why GitOps?** The cluster equals Git; rollback is a Git revert; images are digest-pinned and gated in CI.
-- **Why these storage products?** Relational integrity on Cloud SQL, high-write documents on Firestore, binary
-  objects on Cloud Storage.
-
-## C.2 Ruchir — (a) IaC, (d) GitOps, Patient Registry, Staff Scheduler
-
-- **Is everything really Terraform?** Yes: network, GKE, Cloud SQL, Firestore and its indexes, buckets, Pub/Sub,
-  Eventarc, the function, IAM and Workload Identity, Dataproc and the whole Confluent side; Argo CD itself through
-  `bootstrap_k8s`; the state bucket through `bootstrap`.
-- **How are secrets handled?** Write-only password attributes (never stored in state), Secret Manager versions
-  mounted with the CSI driver, Workload Identity instead of keys, `TF_VAR_*` only in memory.
-- **How does a change reach the cluster?** Pull request → CI (tests, release gate) → merge → CI builds images, pins
-  digests, commits → Argo CD syncs. Nobody runs `kubectl apply` for a service.
-- **Why the app of apps?** One registration discovers every service's Application; projects restrict them to this
-  repository and namespace; auto-sync for stateless services, manual sync where migrations or load tests run.
-- **Patient Registry:** Cloud SQL `patients`, documents in GCS with generated object names (no filenames or bytes in
-  logs), Alembic migrations with a migrator identity, admissions consumed by Allocation.
-- **Staff Scheduler:** Firestore roster; a nurse is assignable only when active, on shift, eligible for the pool and
-  under the concurrency limit; assignment is one Firestore transaction with operation dedup and pool fencing.
-
-## C.3 Pratham — (c) GKE/HPA/load test, (h) observability, Bed Allocation, Triage
-
-- **Why HPAs on Allocation and Triage?** They are the stateless, CPU-bound hot path; 60 % CPU target, 2–10 and 2–6
-  replicas. The lock, not the replica count, guarantees correctness, so scaling out is safe.
-- **What did the load test show?** With 40 virtual users Bed Allocation scaled 2 → 5 and Triage 2 → 4 within a few
-  minutes, then back down; all 25,914 checks passed at about 36 requests/s (median 24 ms). p95 was 4.9 s, above
-  the 3 s target, because writes for one pool queue on that pool's lock and the test used only two pools — the lock
-  trades latency for correctness. Recorded in `11-hpa-load-test.txt`.
-- **How does Allocation stay correct with many replicas?** Per-pool lock with fencing; durable idempotency claims;
-  each remote step persisted with a stable operation ID; `RECOVERING` instead of guessing; the recovery worker on
-  any replica reconciles.
-- **Why can waitlisting return 201?** It is a successful business outcome, not an error.
-- **Waitlist order?** `triage_level` ascending (1 most urgent), then `queued_at`, then `entry_id`; pool changes while
-  waitlisted are rejected; promotion happens under the same pool lock as allocation.
-- **Observability?** Prometheus metrics from every service via Managed Prometheus, one Grafana dashboard (RPS,
-  errors, latency, outcomes, lock waits, outbox backlog, HPA, CPU, restarts), alert rules, structured JSON logs with
-  request IDs in Cloud Logging.
-
-## C.4 Nisarg — (f) ZooKeeper lock, (b) serverless Notification
-
-- **How is the lock built?** Hand-written on raw znodes (kazoo only for the connection): each acquire creates an
-  ephemeral sequential znode under `/locks/<pool>`; the lowest holds the lock; each waiter watches only the znode
-  directly ahead (no herd effect); after a watch fires the queue is re-read.
-- **Fencing token = `czxid`?** ZooKeeper assigns it, it only increases, and a lower queue position has a lower
-  `czxid`. It is (epoch × 2³²) + counter, so it jumps after a leader change (4294967302 → 8589934595 → …); it still
-  increases, which is all fencing needs.
-- **Why leases if znodes are ephemeral?** Ephemeral covers the coordinator dying; leases cover a frozen *caller*
-  while the coordinator is healthy. The lease starts at grant; a reaper deletes expired locks every 0.5 s.
-- **Reaper vs renew race?** The reaper deletes with the version it read; a renew in between bumps the version, so
-  ZooKeeper refuses the delete (`BadVersionError`).
-- **Two replicas?** All state is in ZooKeeper; `lock_id` contains the pool, so any replica serves Renew/Release.
-  A retried Acquire on two replicas creates one claim znode in the same multi-op transaction, so both get the same
-  lease.
-- **Release retries?** Release deletes the lock and writes a tombstone in one transaction; a retry within 10 minutes
-  returns `true`. `false` means "not confirmed", not "failed"; fencing is the real guarantee.
-- **ZooKeeper failures?** 3 nodes, quorum 2. One down: a new leader in seconds, locks survive. Two down: writes are
-  refused (no split brain), readiness 503, Acquire 504. Data is on PVCs; a StatefulSet gives stable identity and
-  DNS; a PDB keeps two nodes up during maintenance.
-- **Why a Cloud Run function?** The brief's serverless function: deployed from source with an entry point,
-  Eventarc trigger, scales 0–3, no image to manage.
-- **Duplicates?** Firestore transaction on `event_id` across all instances. **Gaps?** Highest `stream_sequence` per
-  pool; jumps logged as `notification_gap`; late lower sequences still delivered.
-- **Failures?** Malformed → acknowledged (`notification_rejected`); Firestore errors → raise → retried with 10–600 s
-  backoff → `bed-notifications-dlq` after 10 attempts (policy on the Eventarc subscription, imported into Terraform).
-- **Known limitations:** a caller that gives up during a ZooKeeper outage may still be granted the lock when quorum
-  returns, blocking the pool until the lease expires; `Validate` is not atomic with downstream commits (fencing
-  covers it).
-
-## C.5 Jay — (e) Flink and Kafka, (g) storage, Bed Registry, Resource Analytics
-
-- **Why fencing in Bed Registry if there is a lock?** The stale-client problem: a holder paused past its lease
-  still writes; Bed Registry stores the highest token per pool and rejects lower ones (409 / `FAILED_PRECONDITION`).
-- **Out-of-order events?** Event-time processing: the window comes from the event's own time, with a 5-second
-  watermark, so a late event still lands in its window.
-- **The query?** `TUMBLE(TABLE bed_events, DESCRIPTOR(event_ts), INTERVAL '1' MINUTE)` grouped by `pool_id` and
-  window; `requests` = distinct allocations that were allocated or waitlisted, `allocated`, `waitlisted`,
-  `released`, `conflicts` = allocations whose lock was contended, `contention_rate`, average lock and allocation
-  wait; written to `bed-stats` keyed by `pool_id`.
-- **Why `COUNT(DISTINCT …)`?** Delivery is at-least-once; a redelivered `event_id` is counted once and the query
-  stays an append-only window aggregation, which the Kafka sink requires.
-- **Why read `event_time` as a string?** The producer writes ISO-8601 with microseconds and an offset, which Flink's
-  JSON timestamp parser rejects; it is converted to `event_ts` in SQL.
-- **Exactly-once?** Checkpoints every 60 s in GCS; Kafka offsets are part of the checkpoint.
-- **Credentials?** Read from Secret Manager into memory at submit time and sent over IAP SSH; never in the template,
-  GCS or disk.
-- **Why Confluent?** Managed Kafka allowed by the brief; keeps GKE capacity for the services; per-component keys with
-  least-privilege role bindings, all in Terraform.
-- **Storage choices (g):** see C.1; Bed Registry on Cloud SQL (ACID inventory and fencing state), analytics windows
-  on Firestore (`pool_stats/{pool}_{window_start}`), checkpoints and documents on Cloud Storage.
-
----
-
-# Part D — Troubleshooting (lessons from the deployment)
+# Part C — Troubleshooting (lessons from the deployment)
 
 1. **`password authentication failed for user …`** (migration Job fails, `/readyz` 503): the secret and Cloud SQL
    disagree. Rotate in one session: generate every password, bump every `*_password_version`, apply, then add the

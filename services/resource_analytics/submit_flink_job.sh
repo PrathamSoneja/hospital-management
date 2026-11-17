@@ -2,7 +2,7 @@
 # ============================================================================
 # Submit the Flink SQL job (services/resource_analytics/flink_job.sql) to the Dataproc Flink cluster.
 # Owner: Member D (Jay Patel) - CS/SS G527 requirement (e). Run only after approval, once Confluent is
-# provisioned (docs/RUN-DEMO-VIVA.md §A.5).
+# provisioned (RUNBOOK.md §A.5).
 #
 # Security: the Kafka credentials are read from Secret Manager into shell variables, substituted into the
 # SQL in memory and piped over an IAP SSH tunnel into a 0600 file on the master, which is shredded after

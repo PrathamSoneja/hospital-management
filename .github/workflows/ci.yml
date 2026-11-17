@@ -122,7 +122,7 @@ jobs:
 
   publish-gke-images:
     # Master pushes only, and only once Workload Identity Federation is configured through the repository
-    # variables GCP_WIF_PROVIDER and GCP_WIF_SERVICE_ACCOUNT (docs/RUN-DEMO-VIVA.md §A.3). Without them the job is
+    # variables GCP_WIF_PROVIDER and GCP_WIF_SERVICE_ACCOUNT (RUNBOOK.md §A.3). Without them the job is
     # skipped instead of failing. The provider trusts only this repository's refs/heads/master.
     if: github.event_name == 'push' && github.ref == 'refs/heads/master' && vars.GCP_WIF_PROVIDER != '' && vars.GCP_WIF_SERVICE_ACCOUNT != ''
     needs: checks

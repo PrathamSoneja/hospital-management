@@ -368,7 +368,7 @@ def test_release_of_an_expired_but_unreaped_lock_returns_true(hosts):
         time.sleep(0.2)
 
         assert zk_store.validate(zk, path, "alice", zk_store.fencing_token(zk, path)) == (False, "LEASE_NOT_HELD")
-        # Documented in docs/PROJECT.md §6: true here is not proof the lease was still valid.
+        # Documented in PROJECT.md §6: true here is not proof the lease was still valid.
         assert zk_store.release(zk, path, "alice")
     finally:
         zk.stop()

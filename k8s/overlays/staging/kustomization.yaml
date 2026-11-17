@@ -1,4 +1,4 @@
-# Bed Allocation + Triage on GKE (Argo CD path; docs/RUN-DEMO-VIVA.md §A.3). The release gate rejects any
+# Bed Allocation + Triage on GKE (Argo CD path; RUNBOOK.md §A.3). The release gate rejects any
 # PLACEHOLDER value. CI pins the image digests on each master merge; nothing here is applied by hand.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization

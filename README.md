@@ -38,7 +38,7 @@ flowchart LR
   PR & FL --> GCS[(Cloud Storage)]
 ```
 
-Full diagrams, workflows and design rationale: [`docs/PROJECT.md`](docs/PROJECT.md).
+Full diagrams, workflows and design rationale: [`PROJECT.md`](PROJECT.md).
 
 ## Services
 
@@ -73,8 +73,8 @@ Evidence from the live system: [`docs/evidence/2026-11-16-gke/`](docs/evidence/2
 
 | Document | Contents |
 |---|---|
-| [`docs/PROJECT.md`](docs/PROJECT.md) | Everything about the system: team and division of work, requirement coverage, architecture, services, contracts, how it works, IaC, GitOps, observability, security, design decisions, differences from the design document |
-| [`docs/RUN-DEMO-VIVA.md`](docs/RUN-DEMO-VIVA.md) | How to run it (cloud and local), the demo script covering every requirement, viva preparation per member, troubleshooting |
+| [`PROJECT.md`](PROJECT.md) | Everything about the system: team and division of work, requirement coverage, architecture, services, contracts, how it works, IaC, GitOps, observability, security, design decisions, differences from the design document |
+| [`RUNBOOK.md`](RUNBOOK.md) | How to run it (cloud and local), the demo script covering every requirement, troubleshooting |
 | [`cloud_proj_plan.docx`](cloud_proj_plan.docx) | Design document (deliverable) |
 | [`task_divison.txt`](task_divison.txt) | Team members, IDs and task division (deliverable) |
 | [`docs/261_CC_Assignment_new (1).pdf`](<docs/261_CC_Assignment_new (1).pdf>) | The assignment brief |
@@ -87,7 +87,7 @@ gcloud container clusters get-credentials hospital-gke --location=asia-south1-a 
 kubectl -n argocd get applications
 kubectl -n hospital-system port-forward svc/demo-ui 8080:80
 ```
-Then open <http://localhost:8080>. Provisioning, deployment, Flink and the load test: `docs/RUN-DEMO-VIVA.md` Part A.
+Then open <http://localhost:8080>. Provisioning, deployment, Flink and the load test: `RUNBOOK.md` Part A.
 
 **Local tests:**
 ```bash
@@ -109,7 +109,7 @@ monitoring/        Grafana, Managed Prometheus scraping, dashboard and alert rul
 k6/                load test script and in-cluster Job
 tests/             unit, integration and acceptance tests; local sandbox
 scripts/           release gate, digest pinning, smoke tests, demo helpers
-docs/              project document, run/demo/viva guide, brief, evidence
+docs/              assignment brief and cloud evidence
 ```
 
 ## Team

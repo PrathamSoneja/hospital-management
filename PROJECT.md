@@ -6,7 +6,7 @@ divided, how every part works, how it is deployed on Google Cloud, and how each 
 (`docs/261_CC_Assignment_new (1).pdf`) is met. The design document deliverable is `cloud_proj_plan.docx`; §13 lists
 where the built system differs from it.
 
-Companion document: `docs/RUN-DEMO-VIVA.md` (run, demo, viva). Evidence captured from the live system:
+Companion document: `RUNBOOK.md` (running, demo, troubleshooting). Evidence captured from the live system:
 `docs/evidence/2026-11-16-gke/`.
 
 ---
@@ -340,5 +340,6 @@ files removed.
 | `scripts/` | Release gate, digest pinning, proto compilation, image smoke tests, demo helpers |
 | `.github/workflows/ci.yml` | CI and image promotion |
 | `compose.yaml`, `.env.*.example` | Local development stack |
-| `docs/` | This document, the run/demo/viva guide, the remaining-work tracker, the brief and cloud evidence |
+| `docs/` | The assignment brief and the cloud evidence |
+| `README.md`, `PROJECT.md`, `RUNBOOK.md` | Overview, this document, and how to run and demonstrate the system |
 | `cloud_proj_plan.docx`, `task_divison.txt` | Design document and task division (deliverables) |
