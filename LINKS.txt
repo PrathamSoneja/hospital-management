@@ -1,0 +1,53 @@
+HOSPITAL BED MANAGEMENT ON GOOGLE CLOUD - LIVE AND PUBLIC LINKS
+CS/SS G527 Cloud Computing, scenario S7 (Hospital Bed Management)
+Checked on 2026-11-18: every link below answered without signing in.
+
+================================================================================
+1. PUBLIC WEB SERVICE (Patient Registry on GKE, behind a Google Cloud HTTP load balancer)
+================================================================================
+Interactive API page (try the API in a browser) : http://35.244.157.132/docs
+OpenAPI specification (JSON)                    : http://35.244.157.132/openapi.json
+Health check                                    : http://35.244.157.132/healthz
+
+REST API base                                   : http://35.244.157.132/api/v1
+  POST /api/v1/patients                                  create a patient
+  GET  /api/v1/patients/{patient_id}                     read a patient
+  POST /api/v1/admissions                                open an admission for a patient
+  GET  /api/v1/admissions/{admission_id}                 read an admission
+  POST /api/v1/patients/{patient_id}/documents           upload a PDF/JPEG/PNG (stored in Cloud Storage)
+  GET  /api/v1/patients/{patient_id}/documents/{doc_id}  download a stored document
+
+Notes:
+  - Every POST needs an "Idempotency-Key" header (any unique string); /docs shows the field.
+  - Use synthetic data only.
+  - Plain HTTP. The IP stays the same while the Ingress exists; it changes only if the Ingress is recreated.
+  - /metrics and /readyz are intentionally not exposed (they return 404).
+
+================================================================================
+2. SOURCE CODE AND DOCUMENTATION (public GitHub repository)
+================================================================================
+Repository                 : https://github.com/PrathamSoneja/hospital-management
+Project overview (README)  : https://github.com/PrathamSoneja/hospital-management/blob/master/README.md
+Project document           : https://github.com/PrathamSoneja/hospital-management/blob/master/PROJECT.md
+Runbook (run and demo)     : https://github.com/PrathamSoneja/hospital-management/blob/master/RUNBOOK.md
+Design document (.docx)    : https://github.com/PrathamSoneja/hospital-management/blob/master/cloud_proj_plan.docx
+Task division              : https://github.com/PrathamSoneja/hospital-management/blob/master/task_divison.txt
+Cloud evidence             : https://github.com/PrathamSoneja/hospital-management/tree/master/docs/evidence/2026-11-16-gke
+ZooKeeper failover evidence: https://github.com/PrathamSoneja/hospital-management/tree/master/docs/evidence/2026-11-13-local-zookeeper
+
+Infrastructure as Code     : https://github.com/PrathamSoneja/hospital-management/tree/master/infra/terraform
+GitOps (Argo CD apps)      : https://github.com/PrathamSoneja/hospital-management/tree/master/gitops
+Kubernetes manifests       : https://github.com/PrathamSoneja/hospital-management/tree/master/k8s
+Services                   : https://github.com/PrathamSoneja/hospital-management/tree/master/services
+Flink SQL job              : https://github.com/PrathamSoneja/hospital-management/blob/master/services/resource_analytics/flink_job.sql
+Monitoring (Grafana, GMP)  : https://github.com/PrathamSoneja/hospital-management/tree/master/monitoring
+Load test (k6)             : https://github.com/PrathamSoneja/hospital-management/tree/master/k6
+
+CI/CD runs (GitHub Actions): https://github.com/PrathamSoneja/hospital-management/actions
+Merged pull requests       : https://github.com/PrathamSoneja/hospital-management/pulls?q=is%3Apr+is%3Amerged
+
+================================================================================
+3. NOT PUBLIC BY DESIGN (team members reach these through kubectl port-forward)
+================================================================================
+Demo console, Grafana, Argo CD, the other seven services, Cloud SQL, Firestore, Kafka (Confluent Cloud) and the
+Flink UI on Dataproc are private. How to open them: RUNBOOK.md, section A.4.
