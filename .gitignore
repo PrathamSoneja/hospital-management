@@ -77,8 +77,9 @@ pgdata/
 zookeeper_data/
 kafka_data/
 
-# Team-only viva preparation, kept locally and not submitted
+# Team-only viva preparation and personal study notes, kept locally and not submitted
 docs/RUN-DEMO-VIVA.md
+PRATHAM-GUIDE.md
 
 # Local-only stubs, seeds, emulator helpers, and overrides
 dev-local/*
