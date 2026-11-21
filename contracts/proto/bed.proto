@@ -7,6 +7,7 @@ import "common.proto";
 // BedService provides bed inventory and status management.
 // Owned by Jay Patel (Team Member D).
 // STATUS: PROVISIONAL CONTRACT - pending team review.
+// --- VIVA (Member D - Jay): BedService gRPC definition with fencing context ---
 service BedService {
   rpc ListAvailableBeds (ListAvailableBedsRequest) returns (ListAvailableBedsResponse);
   rpc GetBed (GetBedRequest) returns (GetBedResponse);

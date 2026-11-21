@@ -140,6 +140,7 @@ def test_release_bed_unauthorized_owner(in_memory_service):
     assert success is False
     assert "cannot be released by alloc-999" in err
 
+# --- VIVA (Member D - Jay): Unit Test 1 - Idempotency replay returns exact same outcome ---
 def test_idempotent_operation_replay(in_memory_service):
     # First allocate
     s1, b1, err1 = in_memory_service.allocate_bed(
@@ -215,6 +216,7 @@ def test_release_bed_wrong_pool(in_memory_service):
     assert s is False
     assert "belongs to pool WARDA-ICU, not WARDA-HDU" in err
 
+# --- VIVA (Member D - Jay): Unit Test 2 - Stale fencing token rejected (Core S7 Test) ---
 def test_stale_fencing_token_rejected(in_memory_service):
     """
     CRITICAL VIVA DEMONSTRATION TEST:

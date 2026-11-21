@@ -67,6 +67,7 @@ def get_bed(
         )
     return bed
 
+# --- VIVA (Member D - Jay): REST endpoint to inspect current highest fencing token ---
 @router.get("/pools/{pool_id}/fencing-token", response_model=FencingTokenResponse)
 def get_pool_fencing_token(
     pool_id: str = Path(..., description="Resource pool identifier"),
@@ -75,6 +76,7 @@ def get_pool_fencing_token(
     highest_token = service.get_highest_fencing_token(pool_id)
     return FencingTokenResponse(pool_id=pool_id, highest_fencing_token=highest_token)
 
+# --- VIVA (Member D - Jay): REST allocate endpoint (used for Swagger demo) ---
 @router.post("/beds/{bed_id}/allocate", response_model=OperationResultResponse)
 def allocate_bed_rest(
     payload: AllocateBedRestRequest,
@@ -102,6 +104,7 @@ def allocate_bed_rest(
     )
 
     if not success:
+        # --- VIVA (Member D - Jay): Demo returns HTTP 409 Conflict with STALE_FENCING_TOKEN ---
         if "Stale fencing token" in err:
             raise AppException(
                 code="STALE_FENCING_TOKEN",

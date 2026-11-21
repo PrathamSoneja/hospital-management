@@ -40,6 +40,7 @@ render() {
   cat <<EOF
 SET 'execution.target' = 'yarn-session';
 SET 'pipeline.name' = 'hospital-bed-stats-1m';
+-- --- VIVA (Member D - Jay): Exactly-once state checkpoints persisted to GCS every 60s ---
 SET 'execution.checkpointing.interval' = '60s';
 SET 'execution.checkpointing.mode' = 'EXACTLY_ONCE';
 SET 'state.checkpoints.dir' = 'gs://${JOB_BUCKET}/checkpoints';

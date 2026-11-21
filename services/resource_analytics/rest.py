@@ -39,6 +39,7 @@ def get_aggregator() -> StreamAggregatorEngine:
         )
     return _AGGREGATOR
 
+# --- VIVA (Member D - Jay): REST endpoint to query latest aggregated pool metrics ---
 @router.get("/pools/{pool_id}/latest", response_model=BedStats)
 def get_latest_pool_stats(
     pool_id: str = Path(..., description="Resource pool ID (e.g. WARDA-ICU)"),
@@ -53,6 +54,7 @@ def get_latest_pool_stats(
         )
     return stats
 
+# --- VIVA (Member D - Jay): REST endpoint to query window history from Firestore ---
 @router.get("/pools/{pool_id}/history", response_model=List[BedStats])
 def get_pool_history(
     pool_id: str = Path(...),
