@@ -12,7 +12,6 @@ from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
 
-# --- VIVA (Member D - Jay): Cloud SQL Table 1 - Bed Inventory ---
 class BedModel(Base):
     """
     Relational model representing hospital bed inventory.
@@ -37,7 +36,6 @@ class BedModel(Base):
         Index("idx_bed_pool_status", "pool_id", "status"),
     )
 
-# --- VIVA (Member D - Jay): Cloud SQL Table 2 - Monotonic Fencing Tokens per Pool ---
 class PoolFencingTokenModel(Base):
     """
     Tracks the highest seen fencing token (czxid from ZooKeeper) per resource pool.
@@ -54,7 +52,6 @@ class PoolFencingTokenModel(Base):
         nullable=False
     )
 
-# --- VIVA (Member D - Jay): Cloud SQL Table 3 - Idempotency Operation Log ---
 class BedOperationModel(Base):
     """
     Durable record of bed operations to ensure idempotent execution of operation_id.

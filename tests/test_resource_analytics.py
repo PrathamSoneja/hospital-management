@@ -16,7 +16,6 @@ from services.resource_analytics.aggregator import StreamAggregatorEngine
 from services.resource_analytics.storage import InMemoryAnalyticsStorage
 from services.resource_analytics.main import build_app
 
-# --- VIVA (Member D - Jay): Unit Test 1 - Tumbling window calculation with 5s watermark delay ---
 def test_stream_aggregator_tumbling_window_math():
     engine = StreamAggregatorEngine(watermark_delay_seconds=5)
     base_time = datetime(2026, 11, 6, 12, 0, 10, tzinfo=timezone.utc)

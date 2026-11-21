@@ -16,7 +16,6 @@
 -- template never contains them. The JAAS class is the one shaded inside flink-sql-connector-kafka.
 -- ============================================================================
 
--- --- VIVA (Member D - Jay): Input Source Table from Managed Kafka ---
 CREATE TABLE bed_events (
     schema_version VARCHAR,
     event_id VARCHAR,
@@ -35,12 +34,10 @@ CREATE TABLE bed_events (
     occupancy_delta INT,
     -- 'YYYY-MM-DDTHH:MM:SS...' -> TIMESTAMP(3) (second precision is enough for 1-minute windows)
     event_ts AS TO_TIMESTAMP(REPLACE(SUBSTRING(event_time FROM 1 FOR 19), 'T', ' ')),
-    -- --- VIVA (Member D - Jay): Event Time + 5s Watermark ---
-    -- Allows up to 5 seconds of network delay / out-of-order event arrival before closing window
     WATERMARK FOR event_ts AS event_ts - INTERVAL '5' SECOND
 ) WITH (
     'connector' = 'kafka',
-    'topic' = 'bed-events', -- --- VIVA: Reads raw bed mutation events produced by Bed Allocation ---
+    'topic' = 'bed-events',
     'properties.bootstrap.servers' = '${KAFKA_BOOTSTRAP_SERVERS}',
     'properties.group.id' = 'flink-resource-analytics-group',
     'properties.security.protocol' = 'SASL_SSL',
@@ -53,7 +50,6 @@ CREATE TABLE bed_events (
     'json.ignore-parse-errors' = 'false'
 );
 
--- --- VIVA (Member D - Jay): Output Sink Table (Separate Results Topic) ---
 CREATE TABLE bed_stats (
     schema_version VARCHAR,
     pool_id VARCHAR,
@@ -69,7 +65,7 @@ CREATE TABLE bed_stats (
     contention_rate DOUBLE
 ) WITH (
     'connector' = 'kafka',
-    'topic' = 'bed-stats', -- --- VIVA: Results topic consumed by Resource Analytics ---
+    'topic' = 'bed-stats',
     'properties.bootstrap.servers' = '${KAFKA_BOOTSTRAP_SERVERS}',
     'properties.security.protocol' = 'SASL_SSL',
     'properties.sasl.mechanism' = 'PLAIN',
@@ -105,7 +101,6 @@ SELECT
 FROM (
     SELECT
         pool_id, window_start, window_end,
-        -- --- VIVA (Member D - Jay): Counting with DISTINCT avoids duplicate counting on redelivery ---
         COUNT(DISTINCT CASE WHEN event_type IN ('BED_ALLOCATED', 'ALLOCATION_WAITLISTED') THEN allocation_id END) AS requests,
         COUNT(DISTINCT CASE WHEN event_type = 'BED_ALLOCATED' THEN event_id END) AS allocated,
         COUNT(DISTINCT CASE WHEN event_type = 'ALLOCATION_WAITLISTED' THEN event_id END) AS waitlisted,
@@ -113,8 +108,6 @@ FROM (
         COUNT(DISTINCT CASE WHEN lock_contended THEN allocation_id END) AS conflicts,
         AVG(CAST(lock_wait_ms AS DOUBLE)) AS average_lock_wait_ms,
         AVG(CAST(allocation_wait_ms AS DOUBLE)) AS average_allocation_wait_ms
-    -- --- VIVA (Member D - Jay): 1-Minute Tumbling Event-Time Window per Pool ---
     FROM TABLE(TUMBLE(TABLE bed_events, DESCRIPTOR(event_ts), INTERVAL '1' MINUTE))
-    -- --- VIVA: Aggregated per pool ward and per tumbling window boundary ---
     GROUP BY pool_id, window_start, window_end
 );

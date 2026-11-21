@@ -48,7 +48,6 @@ resource "confluent_api_key" "terraform_kafka" {
   }
 }
 
-# --- VIVA (Member D - Jay): Confluent Cloud Kafka Topic 1 - bed-events (3 partitions) ---
 resource "confluent_kafka_topic" "bed_events" {
   kafka_cluster {
     id = confluent_kafka_cluster.main.id
@@ -66,7 +65,6 @@ resource "confluent_kafka_topic" "bed_events" {
   depends_on = [confluent_role_binding.terraform_cluster_admin]
 }
 
-# --- VIVA (Member D - Jay): Confluent Cloud Kafka Topic 2 - bed-stats (3 partitions) ---
 resource "confluent_kafka_topic" "bed_stats" {
   kafka_cluster {
     id = confluent_kafka_cluster.main.id

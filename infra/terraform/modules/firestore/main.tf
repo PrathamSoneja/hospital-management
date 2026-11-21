@@ -1,6 +1,3 @@
-# --- VIVA (Member D - Jay): Storage Product 2 - Cloud Firestore Native (NoSQL) ---
-# Holds pool_stats 1-minute window documents, triage waitlists, notification streams.
-# Horizontally scalable document database with composite indexes for fast real-time queries.
 resource "google_firestore_database" "main" {
   project                     = var.project_id
   name                        = "(default)"

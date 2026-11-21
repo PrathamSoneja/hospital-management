@@ -80,7 +80,6 @@ class BedGrpcServicer(bed_pb2_grpc.BedServiceServicer):
             GRPC_REQUESTS_TOTAL.labels(service="bed_registry", method="GetBed", code=code).inc()
             GRPC_REQUEST_DURATION_SECONDS.labels(service="bed_registry", method="GetBed").observe(time.perf_counter() - start)
 
-    # --- VIVA (Member D - Jay): Internal gRPC API (port 50053) called by Bed Allocation orchestrator ---
     def AllocateBed(self, request, context):
         start = time.perf_counter()
         code = "OK"

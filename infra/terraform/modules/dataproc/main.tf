@@ -51,7 +51,6 @@ resource "google_dataproc_cluster" "flink_cluster" {
 
     software_config {
       image_version       = "2.1-debian11"
-      # --- VIVA (Member D - Jay): Managed Dataproc Cluster with Apache Flink component ---
       optional_components = ["FLINK", "DOCKER"]
       override_properties = merge(
         { "dataproc:dataproc.allow.custom.images" = "true" },

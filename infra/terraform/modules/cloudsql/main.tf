@@ -1,6 +1,3 @@
-# --- VIVA (Member D - Jay): Storage Product 1 - Cloud SQL (PostgreSQL 16) ---
-# Holds relational inventory: beds, fencing tokens, allocations, patients.
-# Strict ACID transactions and row locks (SELECT ... FOR UPDATE) prevent double-booking.
 resource "google_sql_database_instance" "main" {
   project             = var.project_id
   name                = var.instance_name

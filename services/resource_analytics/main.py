@@ -61,7 +61,6 @@ def start_kafka_consumer_thread(storage: BaseAnalyticsStorage, aggregator: Strea
 
         consumer = Consumer(conf)
         topic = os.environ.get("KAFKA_INPUT_TOPIC", "bed-events")
-        # --- VIVA (Member D - Jay): Subscribes to Kafka topic (configured as bed-stats in Kubernetes) ---
         consumer.subscribe([topic])
         consumer_status["started"] = True
         consumer_status["running"] = True
@@ -78,7 +77,7 @@ def start_kafka_consumer_thread(storage: BaseAnalyticsStorage, aggregator: Strea
 
             try:
                 payload = json.loads(msg.value().decode("utf-8"))
-                # --- VIVA (Member D - Jay): Ingest Flink's BedStats aggregated windows directly ---
+                # Support direct ingestion of Flink's BedStats aggregated windows or raw BedEvents
                 if "window_start" in payload and "window_end" in payload and "requests" in payload:
                     stats = BedStats.model_validate(payload)
                     storage.save_window_stats(stats)

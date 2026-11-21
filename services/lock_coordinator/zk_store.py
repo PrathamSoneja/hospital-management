@@ -102,8 +102,6 @@ def queue(client, pool_id):
     return sorted(client.get_children(f"{LOCK_ROOT}/{pool_id}"))
 
 
-# --- VIVA (Member D - Jay / Member C - Nisarg): Fencing token origin ---
-# Returns the ZooKeeper znode's creation transaction ID (czxid), which monotonically increments
 def fencing_token(client, path):
     """Return the znode's czxid, which is the lock's fencing token."""
     _, stat = client.get(path)

@@ -63,12 +63,9 @@ class FirestoreAnalyticsStorage(BaseAnalyticsStorage):
         from google.cloud import firestore
         self.project_id = project_id or os.environ.get("FIRESTORE_PROJECT_ID", "hospital-bed-mgmt-dev")
         self.client = firestore.Client(project=self.project_id)
-        # --- VIVA (Member D - Jay): Cloud Firestore collection storing 1-minute window metrics ---
         self.collection = self.client.collection("pool_stats")
         logger.info(f"Initialized FirestoreAnalyticsStorage (project={self.project_id})")
 
-    # --- VIVA (Member D - Jay): Deterministic document ID: {pool_id}_{window_start} ---
-    # Guarantees idempotency: redelivered windows cleanly overwrite the exact same document
     def _doc_id(self, pool_id: str, window_start: str) -> str:
         safe_time = window_start.replace(":", "-").replace("+", "_")
         return f"{pool_id}_{safe_time}"
@@ -77,8 +74,9 @@ class FirestoreAnalyticsStorage(BaseAnalyticsStorage):
         doc_id = self._doc_id(stats.pool_id, stats.window_start)
         data = stats.model_dump()
 
-        # --- VIVA: Save historical window point + latest pointer document ---
+        # Save historical point
         self.collection.document(doc_id).set(data)
+        # Update latest pointer document
         self.collection.document(f"{stats.pool_id}_latest").set(data)
         logger.info(f"Saved window stats to Firestore: {doc_id}")
 

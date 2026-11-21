@@ -51,7 +51,6 @@ spec:
               value: "8008"
             - name: ENVIRONMENT
               value: "production"
-            # --- VIVA (Member D - Jay): Resource Analytics subscribes to Flink's bed-stats results topic ---
             - name: KAFKA_INPUT_TOPIC
               value: "bed-stats"
           resources:
