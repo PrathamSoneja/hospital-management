@@ -10,7 +10,7 @@ resources:
 images:
   - name: resource-analytics
     newName: asia-south1-docker.pkg.dev/hospital-management-514618/hospital-repo/resource-analytics
-    digest: sha256:bcf100e59e473e6fd407615560bbc5e939ea5d4241ac7cf79451be80b2636949
+    digest: sha256:153c3af7c8e838ac39841ca70445a97f34bb2329cbe01a377c05791f6f376734
 patches:
   - target: {kind: Deployment, name: resource-analytics-service}
     patch: |-
